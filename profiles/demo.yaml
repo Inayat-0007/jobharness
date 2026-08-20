@@ -1,0 +1,32 @@
+name: demo
+roles:
+  - Backend Engineer
+  - Software Engineer
+keywords:
+  - python
+  - api
+  - backend
+excludes:
+  - manager
+  - director
+  - c++
+location: ""
+remote: true
+seniority: mid
+salary_floor: null
+company_allowlist: []
+sources:
+  remoteok: true
+  weworkremotely: true
+  remotive: true
+  jobicy: true
+  adzuna: true
+  usajobs: true
+  greenhouse: true
+  lever: true
+  google_jobs: true
+  linkedin: false
+  indeed: false
+  glassdoor: false
+llm_provider: gemini
+top_n: 50

@@ -1,0 +1,15 @@
+# Secrets and runtime state — never commit
+.env
+.env.*
+cookies/
+*.db
+*.sqlite
+reports/
+.venv/
+__pycache__/
+*.pyc
+.pytest_cache/
+*.egg-info/
+build/
+dist/
+

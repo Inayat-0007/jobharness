@@ -1,0 +1,28 @@
+name: demo
+roles:
+  - Backend Engineer
+keywords:
+  - python
+excludes:
+  - manager
+location: ""
+remote: true
+seniority: ""
+salary_floor: null
+company_allowlist: []
+sources:
+  remoteok: true
+  weworkremotely: true
+  remotive: false
+  jobicy: false
+  adzuna: false
+  usajobs: false
+  greenhouse: false
+  lever: false
+  career_page_generic: false
+  google_jobs: false
+  linkedin: false
+  indeed: false
+  glassdoor: false
+llm_provider: gemini
+top_n: 50
