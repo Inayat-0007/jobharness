@@ -1,4 +1,4 @@
-from __future__ import annotations
+﻿from __future__ import annotations
 
 import datetime as dt
 import re
@@ -7,8 +7,14 @@ from urllib.parse import urlparse
 
 import httpx
 
+from . import algo
 from .models import Job, CLOSED, MISSING, VALID_AUTHENTIC, _parse_date, freshness_label
 from .fetcher import make_client, blocked_response
+from .urlutil import apply_url_domain as _domain
+from .scoring.authenticity import authenticity_score as _authenticity_score
+from .scoring.thresholds import REJECT as _REJECT_DECISION
+
+_company_domain_hint = algo.company_domain_hint
 
 
 CLOSED_MARKERS = (
@@ -30,42 +36,24 @@ STALE_DAYS = 45
 BLOCKED_RETRY_MS = 0
 
 
-def _domain(url: str) -> str:
-    try:
-        net = urlparse(url).netloc.lower()
-    except Exception:
-        return ""
-    net = net.split("@")[-1]
-    if net.startswith("www."):
-        net = net[4:]
-    return net
-
-
-def _company_domain_hint(company: str) -> str:
-    """Derive an expected employer domain token from the company name."""
-    if not company:
-        return ""
-    c = re.sub(r"[^a-z0-9]+", " ", company.lower()).strip()
-    c = re.sub(r"\s+(inc|llc|ltd|corp|corporation|co|gmbh|the)$", "", c).strip()
-    c = c.replace(" ", "")
-    return c
-
-
 def verify(job: Job, check_reachable: bool = True) -> Job:
     """Resolve apply_url, follow redirects, confirm not CLOSED, score confidence.
 
-    Sets job.authentic_status = CLOSED if unreachable or a closed marker found.
-    Computes job.confidence_score (0-100), sets employer_domain, and validates
-    the apply URL host against the company name.
+    Sets job.authentic_status = CLOSED (and decision = REJECT) if unreachable
+    or a closed marker found. Computes job.confidence_score (0-100), sets
+    employer_domain, and validates the apply URL host against the company name.
     """
     job.confidence_score = _score_base(job)
+    job.authenticity_score = float(_authenticity_score(job))
     url = job.apply_url_direct
     if not url or url == MISSING:
         job.authentic_status = CLOSED
+        job.decision = _REJECT_DECISION
         return job
     # Stale via validThrough (no network needed) => mark CLOSED if in the past.
     if _is_expired(job.valid_through):
         job.authentic_status = CLOSED
+        job.decision = _REJECT_DECISION
         return job
     if not check_reachable:
         return job
@@ -75,21 +63,38 @@ def verify(job: Job, check_reachable: bool = True) -> Job:
             resp = client.get(url)
     except (httpx.HTTPError, OSError):
         job.authentic_status = CLOSED
+        job.decision = _REJECT_DECISION
         return job
+    ctx: dict = {"status_code": resp.status_code}
+    if resp.url:
+        ctx["redirect_to"] = str(resp.url)
     if resp.status_code in (404, 410) or resp.status_code >= 500:
         job.authentic_status = CLOSED
+        job.decision = _REJECT_DECISION
+        job._verify_ctx = ctx
         return job
     if resp.url and str(resp.url) != url:
         job.apply_url_direct = str(resp.url)
     job.employer_domain = _domain(job.apply_url_direct)
     if blocked_response(resp):
+        ctx["blocked"] = True
+        job._verify_ctx = ctx
         job.missing_fields.append("verified_reachable")
         job.confidence_score = min(job.confidence_score, 40)
         return job
     snippet = (resp.text or "")[:8000].lower()
-    if any(m in snippet for m in CLOSED_MARKERS):
+    marker = next((m for m in CLOSED_MARKERS if m in snippet), "")
+    if marker:
+        ctx["closed_marker"] = marker
+        if "position has been filled" in marker:
+            ctx["position_filled"] = True
+        if any(m in snippet for m in ("captcha", "are you a robot", "verify you are human")):
+            ctx["captcha"] = True
+        job._verify_ctx = ctx
         job.authentic_status = CLOSED
+        job.decision = _REJECT_DECISION
         return job
+    job._verify_ctx = ctx
     # Domain matches employer name -> boost confidence
     if job.employer_domain and job.company:
         hint = _company_domain_hint(job.company)
@@ -110,12 +115,14 @@ def _is_expired(valid_through: str) -> bool:
 
 
 def _score_base(job: Job) -> int:
-    """Confidence from field completeness + freshness, before reachability."""
-    score = 0
-    for f in ("title", "company", "apply_url_direct", "date_posted", "location", "experience_needed"):
-        v = getattr(job, f, "")
-        if v and v != MISSING:
-            score += 8
+    """Confidence from algo.authenticity_features + existing weighting.
+
+    Semantics identical to the original loop (6 fields x 8pts completeness,
+    freshness, ATS-source bonus, expired validThrough penalty); only the source
+    of the feature values moved into algo.py. Never called "probability".
+    """
+    feats = algo.authenticity_features(job)
+    score = int(round(feats["completeness"] * 48))
     fr = job.freshness or freshness_label(job.date_posted)
     job.freshness = fr
     if fr == "fresh":

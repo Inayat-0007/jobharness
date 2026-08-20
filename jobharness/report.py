@@ -29,7 +29,7 @@ a.btn{display:inline-block;padding:4px 10px;background:#1a73e8;color:#fff;text-d
 <h1>Job Harness Report - {{ run_ts }}</h1>
 <p>{{ jobs|length }} jobs. {{ new_count }} genuinely new. {{ closed_count }} closed.</p>
 <table><thead><tr>
-<th>Fresh</th><th>Date</th><th>Title</th><th>Company</th><th>Loc</th><th>Exp</th><th>Salary</th><th>Score</th><th>Apply</th><th>Status</th><th>Domain</th><th>Sources</th>
+<th>Fresh</th><th>Date</th><th>Title</th><th>Company</th><th>Loc</th><th>Exp</th><th>Salary</th><th>Score</th><th>Decision</th><th>Apply</th><th>Status</th><th>Domain</th><th>Sources</th>
 </tr></thead><tbody>
 {% for j in jobs %}
 <tr class="{% if j.authentic_status=='CLOSED' %}closed{% elif j.genuinely_new %}new{% endif %}">
@@ -41,6 +41,7 @@ a.btn{display:inline-block;padding:4px 10px;background:#1a73e8;color:#fff;text-d
 <td>{{ j.experience_needed }}</td>
 <td>{{ j.salary_if_present }}</td>
 <td>{{ j.confidence_score }}</td>
+<td>{{ j.decision or '' }}{% if j.reason %}<br><small>{{ j.reason[0] }}</small>{% endif %}</td>
 <td><a class="btn" href="{{ j.apply_url_direct }}" target="_blank">Apply</a></td>
 <td class="{% if j.authentic_status=='CLOSED' %}bad{% else %}ok{% endif %}">{{ j.authentic_status }}</td>
 <td><small>{{ j.employer_domain }}</small></td>
@@ -71,6 +72,9 @@ def write_reports(jobs: list[Job], out_dir: str | Path, run_ts: str | None = Non
         "confidence_score", "authentic_status", "employer_domain", "valid_through",
         "apply_url_direct", "source_name", "source_url", "first_seen_at",
         "genuinely_new", "seen_sources", "missing_fields", "job_id_hash",
+        "decision", "identity_score", "authenticity_score", "match_score",
+        "matched_via", "possible_duplicate_of", "canonical_job_id", "block_key",
+        "evidence", "negative_evidence", "reason",
     ]
     with csv_path.open("w", newline="", encoding="utf-8") as f:
         w = csv.writer(f)

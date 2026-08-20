@@ -6,6 +6,8 @@ import time
 from dataclasses import dataclass, field, asdict
 from typing import Optional
 
+from .algo import normalize_company, description_fingerprint as _description_fingerprint
+
 
 def _norm(text: Optional[str]) -> str:
     if not text:
@@ -68,6 +70,24 @@ class Job:
     missing_fields: list = field(default_factory=list)
     genuinely_new: bool = False
     seen_sources: list = field(default_factory=list)
+    original_url: str = ""
+    canonical_url: str = ""
+    final_url: str = ""
+    posting_id: str = ""
+    canonical_job_id: str = ""
+    block_key: list = field(default_factory=list)
+    possible_duplicate_of: str = ""
+    identity_score: float = 0.0
+    authenticity_score: float = 0.0
+    match_score: float = 0.0
+    decision: str = ""
+    matched_via: str = "exact"
+    description_fingerprint: str = ""
+    source_authority: int = 0
+    job_version: int = 1
+    evidence: list = field(default_factory=list)
+    negative_evidence: list = field(default_factory=list)
+    reason: list = field(default_factory=list)
 
     def to_dict(self) -> dict:
         return asdict(self)
@@ -75,6 +95,31 @@ class Job:
     def compute_hash(self) -> str:
         self.job_id_hash = job_id_hash(self.title, self.company, self.location)
         return self.job_id_hash
+
+    def compute_canonical_id(self) -> str:
+        """Identity hierarchy, first non-empty wins:
+        LEVEL 1 ATS/external posting ID
+        LEVEL 2 canonical URL
+        LEVEL 3 company entity + normalized title (location-agnostic)
+        LEVEL 4 company + title + location
+        LEVEL 5 fallback to job_id_hash (never empty)
+        """
+        if self.posting_id:
+            return f"posting:{self.posting_id}"
+        if self.canonical_url:
+            return f"url:{self.canonical_url}"
+        entity = normalize_company(self.company)
+        if entity and self.title:
+            return f"ct:{entity}|{_norm(self.title)}"
+        if self.company and self.title and self.location:
+            return f"ct:{_norm(self.company)}|{_norm(self.title)}|{_norm(self.location)}"
+        if not self.job_id_hash:
+            self.compute_hash()
+        return f"hash:{self.job_id_hash}"
+
+    def compute_fingerprint(self) -> str:
+        self.description_fingerprint = _description_fingerprint(self.description)
+        return self.description_fingerprint
 
     def mark_missing(self) -> None:
         missing = []

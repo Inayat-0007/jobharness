@@ -50,3 +50,22 @@ def blocked_response(resp: httpx.Response) -> bool:
     body_snippet = (resp.text or "")[:2000].lower()
     markers = ("captcha", "are you a robot", "access denied", "unusual traffic", "verify you are human")
     return any(m in body_snippet for m in markers)
+
+
+def classify_response(resp: httpx.Response):
+    """Map an httpx.Response to a typed SourceStatus (None when healthy).
+
+    Adapters may use this to raise the typed exceptions in
+    `jobharness.sources.exceptions`; the runner also maps fetch outcomes.
+    """
+    from .evidence.source import SourceStatus
+
+    if resp.status_code == 429 or "rate limit" in (resp.text or "").lower():
+        return SourceStatus.RATE_LIMITED
+    if resp.status_code == 401:
+        return SourceStatus.AUTH_REQUIRED
+    if resp.status_code >= 500:
+        return SourceStatus.SOURCE_DOWN
+    if blocked_response(resp):
+        return SourceStatus.BLOCKED
+    return None

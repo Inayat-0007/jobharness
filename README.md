@@ -78,18 +78,54 @@ block detection (403/429 + CAPTCHA markers) → log + skip source + continue.
   from the Telegram push (still listed in the report). `validThrough` in the past
   also marks `CLOSED` without a network call.
 
-## Authenticity & confidence scoring
+## Authenticity, identity & relevance scoring
 
-Each job gets a `confidence_score` (0-100) computed from:
-- field completeness (title/company/url/date/location/experience),
-- freshness (`fresh` > `recent` > `older` > `stale`),
-- employer-domain match — the resolved apply URL host is checked against the
-  company name; aggregator-only URLs (e.g. `remoteok.com` for "Pivotal Health")
-  are capped lower because the apply link is not the employer's ATS,
-- employer ATS sources (Greenhouse/Lever/career pages/USAJobs) get a boost.
+Each job carries three scores (all stored as raw heuristics — **not
+probabilities** until Phase 4 calibration produces data-backed values):
 
-Telegram only pushes jobs with `confidence_score >= 50`, so weak/aggregator-only
-leads stay in the report but don't spam your phone.
+- `identity_score` (0-1) — how similar this posting is to an already-stored
+  one (`algo.composite_similarity`: title Jaro-Winkler + company identity +
+  location + description, with hard title-floor and domain-contradiction
+  gates). 0.0 = no known duplicate.
+- `authenticity_score` (0-100) — weighted raw heuristic from
+  `jobharness/scoring/authenticity.py`: source authority, employer-domain
+  match, posting ID, HTTP status, validThrough, freshness, completeness,
+  cross-source agreement, minus closed markers.
+- `match_score` (0-1) — BM25 relevance vs the profile
+  (`jobharness/scoring/matching.py`): 0.60 * (0.60*title + 0.40*description)
+  blended with 0.20 skill overlap, 0.10 experience, 0.10 location. Hard
+  matcher rules (`matches_profile`) stay authoritative — BM25 only ranks.
+
+The decision engine (`jobharness/scoring/decision.py`) maps the three scores
+to a per-job `decision` (`AUTO_ACCEPT` / `REVIEW` / `REJECT`); all thresholds
+are centralized in `jobharness/scoring/thresholds.py` and `jobharness/algo.py`
+— never scattered in runner/verify/matcher.
+
+`confidence_score` remains as a backward-compatible column.
+
+### Push gate
+
+Telegram pushes only `decision == AUTO_ACCEPT` **and** `genuinely_new` **and**
+not CLOSED. Fuzzy-merged (HIGH identity) and REVIEW jobs never alert — this is
+deliberately conservative: fewer, higher-confidence alerts. Reports still list
+everything with a Decision column.
+
+### Source statuses
+
+Each run records a per-source `SourceStatus` (ok / empty / blocked /
+rate_limited / auth_required / source_down / parse_failure / no_match),
+printed in the summary and returned in the run result.
+
+### Cross-source & cross-run dedup
+
+- Within-run: same title+company collapses to one extraction (unchanged).
+- Cross-run: blocking keys (company+title stem, company+location bucket,
+  domain+stem, posting ID, apply-domain+stem) find candidates; `fuzzy_lookup`
+  scores them — HIGH merges into the stored row (no alert), MEDIUM flags
+  `possible_duplicate_of` + REVIEW, LOW follows the normal new path.
+- `job_id_hash` stays the primary key; `canonical_job_id` (posting ID →
+  canonical URL → company entity + title → company+title+location → hash)
+  enables lookup before upsert.
 
 ## Anti-bot (gated sources)
 
@@ -104,18 +140,23 @@ manually (no automated solving, by design).
 ## Output
 
 Per run, under `reports/<timestamp>/`:
-- `report.html` — readable table with Apply buttons + Score + Status + Domain
-- `report.csv` — flat spreadsheet (includes confidence/valid_through/domain)
+- `report.html` — readable table with Apply buttons + Score + Decision +
+  Status + Domain
+- `report.csv` — flat spreadsheet (includes decision, identity/authenticity/
+  match scores, evidence, reasons, canonical ids)
 - `report.json` — full structured data
 
-Telegram (if configured) sends one card per genuinely-new, authentic,
-sufficient-confidence job with a direct Apply button, plus the full CSV attached.
+Telegram (if configured) sends one card per AUTO_ACCEPT genuinely-new job with
+a direct Apply button (card shows decision + top reason), plus the full CSV
+attached.
 
-State: `jobs.db` (SQLite v2, auto-migrated from v1) stores
+State: `jobs.db` (SQLite v3, auto-migrated from v1/v2) stores
 `job_id_hash = sha1(normalize(title|company|location))` so reposts across
 sources collapse into one row; `first_seen_at` flags which are genuinely new.
-CLOSED jobs are pruned after 90 days of inactivity. CLOSED jobs are never
-alerted as "new".
+v3 adds identity/authenticity columns (`canonical_job_id`, `block_key`,
+`possible_duplicate_of`, scores, decision, `matched_via`, posting ID, evidence,
+description) with indexed lookup. CLOSED jobs are pruned after 90 days of
+inactivity. CLOSED jobs are never alerted as "new".
 
 ## Cost & rate safety
 
@@ -137,11 +178,20 @@ python -m pip install pytest
 python -m pytest tests\ -q
 ```
 
-50 offline tests cover: no-hallucination extraction, RemoteOK parsing, dedupe +
-v1→v2 schema migration + retention pruning, verifier CLOSED/confidence/domain
+166 offline tests cover: no-hallucination extraction, RemoteOK parsing, dedupe +
+v1→v2→v3 schema migration + retention pruning, verifier CLOSED/confidence/domain
 logic, freshness date parsing (RFC-2822/ISO-Z/offset/plain/future), the shared
-JobPosting JSON-LD parser, matcher filters, report generation, and the full
-end-to-end pipeline (no network needed).
+JobPosting JSON-LD parser, matcher filters, report generation, full end-to-end
+pipeline, cross-run fuzzy dedup, identity/posting-id extraction, evidence
+signals + source statuses, BM25 matching + decision engine, and the evaluation
+benchmark dataset + metrics (no network needed).
+
+## Optional extras
+
+```powershell
+# Phase 4 ML evaluation (scikit-learn / numpy — not needed for production)
+pip install jobharness[ml]
+```
 
 ## Honest limitations
 

@@ -24,6 +24,7 @@ class Profile:
     sources: dict = field(default_factory=dict)        # {source_name: bool}
     llm_provider: str = "gemini"
     top_n: int = 50
+    use_ml: bool = False                                # Phase 4 GATE: off by default
 
 
 def default_sources() -> dict:

@@ -2,9 +2,10 @@ from __future__ import annotations
 
 import datetime as dt
 import traceback
+from collections import Counter
 from concurrent.futures import ThreadPoolExecutor, as_completed
 
-from . import secrets
+from . import secrets, algo
 from .models import Job, RawJob, MISSING, CLOSED
 from .profile import Profile
 from .registry import enabled_adapters
@@ -13,11 +14,32 @@ from .matcher import matches_profile
 from .verify import verify
 from .dedupe import DedupeStore
 from .report import write_reports
+from .urlutil import canonicalize_url
 from .notify import telegram
+from .evidence.source import SourceStatus, source_authority
+from .evidence.positive import positive_signals
+from .evidence.negative import negative_signals
+from .evidence.reason import compose_reasons
+from .identity.posting_id import extract_posting_id
+from .sources.exceptions import (
+    RateLimitedError,
+    AuthRequiredError,
+    SourceDownError,
+    ParseFailureError,
+)
+
+
+from .scoring.matching import score_match
+from .scoring.decision import decide
+from .scoring.authenticity import authenticity_score as _authenticity_score
+from .scoring.thresholds import STATE_OPEN, STATE_CLOSED, STATE_INVALID_URL
 
 
 # Safety cap: never make more than this many LLM extraction calls per run.
 DEFAULT_LLM_BUDGET = 200
+
+# Sort rank: AUTO_ACCEPT > REVIEW > REJECT/"" (plan 1.5.4).
+DECISION_RANK = {"AUTO_ACCEPT": 3, "REVIEW": 2, "REJECT": 0, "": 0}
 
 
 def run_once(
@@ -46,17 +68,28 @@ def run_once(
     raw_jobs: list[RawJob] = []
     blocked: list[str] = []
     errors: list[str] = []
+    source_statuses: dict[str, SourceStatus] = {}
 
     def _fetch(adapter):
         try:
-            return adapter.name, adapter.fetch(profile), None
+            jobs = adapter.fetch(profile)
+            return adapter.name, jobs, None, SourceStatus.OK if jobs else SourceStatus.EMPTY
+        except RateLimitedError as e:
+            return adapter.name, [], f"{e}", SourceStatus.RATE_LIMITED
+        except AuthRequiredError as e:
+            return adapter.name, [], f"{e}", SourceStatus.AUTH_REQUIRED
+        except SourceDownError as e:
+            return adapter.name, [], f"{e}", SourceStatus.SOURCE_DOWN
+        except ParseFailureError as e:
+            return adapter.name, [], f"{e}", SourceStatus.PARSE_FAILURE
         except Exception as e:
-            return adapter.name, [], f"{e}\n{traceback.format_exc()}"
+            return adapter.name, [], f"{e}\n{traceback.format_exc()}", SourceStatus.SOURCE_DOWN
 
     with ThreadPoolExecutor(max_workers=4) as ex:
         futures = {ex.submit(_fetch, a): a for a in adapters}
         for fut in as_completed(futures):
-            name, jobs, err = fut.result()
+            name, jobs, err, status = fut.result()
+            source_statuses[name] = status
             if err:
                 errors.append(f"{name}: {err.splitlines()[0]}")
             if not jobs and not err:
@@ -115,20 +148,75 @@ def run_once(
         for job in matched:
             verify(job, check_reachable=False)
 
-    # Rank by confidence, then freshness, then newest first_seen
-    matched.sort(key=lambda j: (j.confidence_score, j.freshness == "fresh", -j.first_seen_at), reverse=True)
+    # Identity + evidence enrichment: canonical URLs, posting ID, source
+    # authority, canonical job id, block keys, fingerprint, evidence/reasons.
+    for job in matched:
+        job.original_url = job.apply_url_direct
+        job.canonical_url = canonicalize_url(job.apply_url_direct)
+        job.final_url = job.apply_url_direct
+        job.posting_id = extract_posting_id(job)
+        job.source_authority = source_authority(job.source_name)
+        job.canonical_job_id = job.compute_canonical_id()
+        job.block_key = algo.blocking_keys(job)
+        job.compute_fingerprint()
+        job.authenticity_score = float(_authenticity_score(job))
+        vctx = getattr(job, "_verify_ctx", None)
+        job.evidence = positive_signals(job, vctx)
+        job.negative_evidence = negative_signals(job, vctx)
+        job.reason = compose_reasons(job.evidence, job.negative_evidence)
+
+    # Sources that fetched jobs but none matched the profile.
+    matched_by_source = Counter(j.source_name for j in matched)
+    for a in adapters:
+        if source_statuses.get(a.name) == SourceStatus.OK and matched_by_source.get(a.name, 0) == 0:
+            source_statuses[a.name] = SourceStatus.NO_MATCH
 
     # De-duplicate + mark genuinely new. CLOSED jobs are still stored (so we
     # don't re-alert on them) but never counted as genuinely_new for alerts.
+    # Cross-run fuzzy linkage runs BEFORE upsert: HIGH matches are merged into
+    # the stored row (no new row, no alert), MEDIUM gets possible_duplicate_of
+    # + REVIEW decision, LOW follows the normal new path.
     store = DedupeStore(db_path)
     try:
         for job in matched:
             try:
-                store.upsert(job)
+                fl = store.fuzzy_lookup(job)
+                job.identity_score = fl["identity_score"]
+                job.match_score = score_match(job, profile)
+                state = STATE_CLOSED if job.authentic_status == CLOSED else (
+                    STATE_INVALID_URL
+                    if not job.apply_url_direct or job.apply_url_direct == MISSING
+                    else STATE_OPEN
+                )
+                job.decision, decision_reasons = decide(
+                    job.identity_score, job.authenticity_score, job.match_score, state
+                )
+                job.reason = list(job.reason) + decision_reasons
+                if fl["matched"]:
+                    store.merge(job, fl["existing_row"])
+                    job.matched_via = fl["matched_via"]
+                    job.possible_duplicate_of = fl["possible_duplicate_of"]
+                else:
+                    if fl["decision_hint"] == "REVIEW":
+                        job.possible_duplicate_of = fl["possible_duplicate_of"]
+                        job.matched_via = fl["matched_via"] or "exact"
+                    store.upsert(job)
             except Exception as e:
                 errors.append(f"dedupe: {e}")
     finally:
         store.close()
+
+    # Rank by decision, then match_score (fallback: confidence_score until
+    # Phase 3), then freshness, then newest first_seen.
+    matched.sort(
+        key=lambda j: (
+            DECISION_RANK.get(j.decision, 0),
+            j.match_score if j.match_score else j.confidence_score,
+            j.freshness == "fresh",
+            -j.first_seen_at,
+        ),
+        reverse=True,
+    )
 
     # Report
     rep = write_reports(matched, reports_dir, run_ts=run_ts)
@@ -145,9 +233,15 @@ def run_once(
     elif push_telegram and not telegram.configured():
         print("[jobharness] Telegram not configured (TELEGRAM_BOT_TOKEN/CHAT_ID) - skipping push")
 
+    decisions = {k: v for k, v in Counter(j.decision or "NONE" for j in matched).items() if v}
     print(
         f"[jobharness] done: match={rep['total']} new={rep['new_count']} closed={rep['closed_count']} "
         f"pushed={pushed} blocked={blocked} errors={len(errors)}"
+    )
+    print(f"[jobharness] decisions: {decisions}")
+    print(
+        "[jobharness] source statuses: "
+        + ", ".join(f"{n}={s.value}" for n, s in source_statuses.items())
     )
     print(f"[jobharness] reports: {rep['html']}")
 
@@ -159,4 +253,5 @@ def run_once(
         "pushed": pushed,
         "total_raw": len(raw_jobs),
         "total_matched": len(matched),
+        "source_statuses": {k: v.value for k, v in source_statuses.items()},
     }

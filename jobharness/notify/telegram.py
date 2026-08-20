@@ -33,8 +33,13 @@ def send_card(job: Job) -> bool:
         f"Posted: {_html.escape(job.date_posted)} ({_html.escape(job.freshness or '')})\n"
         f"Exp: {_html.escape(job.experience_needed or '-')} | Salary: {_html.escape(job.salary_if_present or '-')}\n"
         f"Source: {_html.escape(job.source_name or '')} | Score: {job.confidence_score}\n"
-        f'<a href="{_html.escape(job.apply_url_direct, quote=True)}">Apply directly</a>'
     )
+    if getattr(job, "decision", ""):
+        text += f"Decision: {_html.escape(job.decision)}\n"
+    reasons = getattr(job, "reason", []) or []
+    if reasons:
+        text += f"Reason: {_html.escape(str(reasons[0]))}\n"
+    text += f'<a href="{_html.escape(job.apply_url_direct, quote=True)}">Apply directly</a>'
     url = f"https://api.telegram.org/bot{token}/sendMessage"
     try:
         with httpx.Client(timeout=30.0) as client:
@@ -75,11 +80,13 @@ def send_file(path: str, caption: str = "") -> bool:
 
 
 def notify_new(jobs: list[Job]) -> int:
+    """Push only AUTO_ACCEPT decisions: genuinely new + not CLOSED + decided
+    AUTO_ACCEPT. Fuzzy-merged (HIGH) and REVIEW jobs never alert."""
     sent = 0
     for j in jobs:
         if not j.genuinely_new or j.authentic_status == "CLOSED":
             continue
-        if j.confidence_score < 50:
+        if getattr(j, "decision", "") != "AUTO_ACCEPT":
             continue
         if send_card(j):
             sent += 1
