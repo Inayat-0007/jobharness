@@ -26,10 +26,10 @@ a.btn{display:inline-block;padding:4px 10px;background:#1a73e8;color:#fff;text-d
 <h1>Job Harness Report - {{ run_ts }}</h1>
 <p>{{ jobs|length }} jobs. {{ new_count }} genuinely new. {{ closed_count }} closed.</p>
 <table><thead><tr>
-<th>Fresh</th><th>Date</th><th>Title</th><th>Company</th><th>Loc</th><th>Exp</th><th>Salary</th><th>Apply</th><th>Status</th><th>Sources</th>
+<th>Fresh</th><th>Date</th><th>Title</th><th>Company</th><th>Loc</th><th>Exp</th><th>Salary</th><th>Score</th><th>Apply</th><th>Status</th><th>Domain</th><th>Sources</th>
 </tr></thead><tbody>
 {% for j in jobs %}
-<tr class="{% if not j.authentic or j.authentic_status=='CLOSED' %}closed{% elif j.genuinely_new %}new{% endif %}">
+<tr class="{% if j.authentic_status=='CLOSED' %}closed{% elif j.genuinely_new %}new{% endif %}">
 <td>{{ j.freshness }}</td>
 <td>{{ j.date_posted }}</td>
 <td>{{ j.title }}<br><small>{{ j.role }}</small></td>
@@ -37,8 +37,10 @@ a.btn{display:inline-block;padding:4px 10px;background:#1a73e8;color:#fff;text-d
 <td>{{ j.location }}{% if j.remote %} (remote){% endif %}</td>
 <td>{{ j.experience_needed }}</td>
 <td>{{ j.salary_if_present }}</td>
+<td>{{ j.confidence_score }}</td>
 <td><a class="btn" href="{{ j.apply_url_direct }}" target="_blank">Apply</a></td>
 <td class="{% if j.authentic_status=='CLOSED' %}bad{% else %}ok{% endif %}">{{ j.authentic_status }}</td>
+<td><small>{{ j.employer_domain }}</small></td>
 <td>{{ j.seen_sources|join(', ') }}</td>
 </tr>
 {% endfor %}
@@ -63,8 +65,9 @@ def write_reports(jobs: list[Job], out_dir: str | Path, run_ts: str | None = Non
     fields = [
         "freshness", "date_posted", "title", "role", "company", "location", "remote",
         "experience_needed", "salary_if_present", "seniority", "tech_stack_keywords",
+        "confidence_score", "authentic_status", "employer_domain", "valid_through",
         "apply_url_direct", "source_name", "source_url", "first_seen_at",
-        "genuinely_new", "authentic_status", "seen_sources", "missing_fields", "job_id_hash",
+        "genuinely_new", "seen_sources", "missing_fields", "job_id_hash",
     ]
     with csv_path.open("w", newline="", encoding="utf-8") as f:
         w = csv.writer(f)

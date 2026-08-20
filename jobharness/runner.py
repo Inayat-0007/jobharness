@@ -1,12 +1,11 @@
 from __future__ import annotations
 
 import datetime as dt
-import time
 import traceback
 from concurrent.futures import ThreadPoolExecutor, as_completed
 
 from . import secrets
-from .models import Job, RawJob, MISSING
+from .models import Job, RawJob, MISSING, CLOSED
 from .profile import Profile
 from .registry import enabled_adapters
 from .extractor import extract
@@ -15,6 +14,10 @@ from .verify import verify
 from .dedupe import DedupeStore
 from .report import write_reports
 from .notify import telegram
+
+
+# Safety cap: never make more than this many LLM extraction calls per run.
+DEFAULT_LLM_BUDGET = 200
 
 
 def run_once(
@@ -26,6 +29,7 @@ def run_once(
     verify_reachable: bool = True,
     use_llm: bool = True,
     push_telegram: bool = True,
+    llm_budget: int = DEFAULT_LLM_BUDGET,
 ) -> dict:
     secrets.load_env(project_root)
     if top_n:
@@ -60,11 +64,26 @@ def run_once(
             raw_jobs.extend(jobs)
             print(f"[jobharness] {name}: {len(jobs)} raw")
 
-    # Extract + match
-    matched: list[Job] = []
+    # Extract + match. LLM extraction is capped to llm_budget jobs; the rest use
+    # fast no-LLM extraction to bound API cost. Dedup by raw title+company first
+    # so the budget targets unique postings.
+    seen_keys = set()
+    unique_raws: list[RawJob] = []
     for raw in raw_jobs:
+        key = (raw.source_name, (raw.title or "").lower(), (raw.company or "").lower())
+        if key in seen_keys:
+            continue
+        seen_keys.add(key)
+        unique_raws.append(raw)
+
+    llm_remaining = llm_budget if use_llm else 0
+    matched: list[Job] = []
+    for raw in unique_raws:
+        use_this_llm = llm_remaining > 0
+        if use_this_llm:
+            llm_remaining -= 1
         try:
-            job = extract(raw, use_llm=use_llm, llm_provider=profile.llm_provider)
+            job = extract(raw, use_llm=use_this_llm, llm_provider=profile.llm_provider)
         except Exception as e:
             errors.append(f"extract[{raw.source_name}]: {e}")
             continue
@@ -76,17 +95,30 @@ def run_once(
         except Exception:
             pass
         matched.append(job)
+    if use_llm and llm_remaining == 0:
+        print(f"[jobharness] LLM budget ({llm_budget}) reached; remaining extractions used raw fields")
     print(f"[jobharness] matched after filter: {len(matched)}")
 
-    # Verify (resolve apply URL, detect CLOSED)
-    for job in matched:
-        try:
-            verify(job, check_reachable=verify_reachable)
-        except Exception as e:
-            errors.append(f"verify[{job.source_name}]: {e}")
-            job.missing_fields.append("verified_reachable")
+    # Verify concurrently (network-bound). Verify also sets confidence_score.
+    if verify_reachable and matched:
+        with ThreadPoolExecutor(max_workers=6) as ex:
+            futs = {ex.submit(verify, job, True): job for job in matched}
+            for fut in as_completed(futs):
+                job = futs[fut]
+                try:
+                    fut.result()
+                except Exception as e:
+                    errors.append(f"verify[{job.source_name}]: {e}")
+                    job.missing_fields.append("verified_reachable")
+    else:
+        for job in matched:
+            verify(job, check_reachable=False)
 
-    # De-duplicate + mark genuinely new
+    # Rank by confidence, then freshness, then newest first_seen
+    matched.sort(key=lambda j: (j.confidence_score, j.freshness == "fresh", -j.first_seen_at), reverse=True)
+
+    # De-duplicate + mark genuinely new. CLOSED jobs are still stored (so we
+    # don't re-alert on them) but never counted as genuinely_new for alerts.
     store = DedupeStore(db_path)
     try:
         for job in matched:
@@ -100,7 +132,7 @@ def run_once(
     # Report
     rep = write_reports(matched, reports_dir, run_ts=run_ts)
 
-    # Telegram push (genuinely new + authentic only)
+    # Telegram push (genuinely new + authentic + sufficient confidence only)
     pushed = 0
     if push_telegram and telegram.configured():
         try:

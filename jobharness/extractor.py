@@ -117,6 +117,10 @@ def extract(raw: RawJob, use_llm: bool = True, llm_provider: str = "gemini") -> 
         job.salary_if_present = str(extra.get("salary"))
     if extra.get("seniority"):
         job.seniority = str(extra.get("seniority"))
+    if extra.get("valid_through"):
+        job.valid_through = str(extra.get("valid_through"))
+    if extra.get("remote") and not job.remote:
+        job.remote = True
 
     job.compute_hash()
     job.mark_missing()

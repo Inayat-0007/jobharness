@@ -1,7 +1,5 @@
 from __future__ import annotations
 
-import urllib.parse
-
 import httpx
 
 from .. import secrets
@@ -73,10 +71,8 @@ def notify_new(jobs: list[Job]) -> int:
     for j in jobs:
         if not j.genuinely_new or j.authentic_status == "CLOSED":
             continue
+        if j.confidence_score < 50:
+            continue
         if send_card(j):
             sent += 1
     return sent
-
-
-def safe_url(url: str) -> str:
-    return urllib.parse.quote(url, safe=":/?&=%")

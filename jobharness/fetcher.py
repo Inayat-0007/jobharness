@@ -29,7 +29,6 @@ def random_delay(low: float = 0.5, high: float = 2.0) -> None:
 
 def make_client(timeout: float = 30.0) -> httpx.Client:
     proxy = pick_proxy()
-    transport_kwargs = {}
     client_kwargs = dict(
         timeout=timeout,
         follow_redirects=True,

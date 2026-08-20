@@ -62,6 +62,9 @@ class Job:
     first_seen_at: float = 0.0
     job_id_hash: str = ""
     authentic_status: str = VALID_AUTHENTIC
+    confidence_score: int = 0
+    valid_through: str = ""
+    employer_domain: str = ""
     missing_fields: list = field(default_factory=list)
     genuinely_new: bool = False
     seen_sources: list = field(default_factory=list)
@@ -82,26 +85,61 @@ class Job:
         self.missing_fields = missing
 
 
+def _parse_date(date_posted: str) -> Optional["_dt.datetime"]:
+    import datetime as _dt
+    from email.utils import parsedate_to_datetime
+
+    s = date_posted.strip()
+    if not s or s == MISSING:
+        return None
+    # RFC-2822 / RSS pubDate, e.g. "Wed, 14 Nov 2023 10:00:00 GMT"
+    try:
+        r = parsedate_to_datetime(s)
+        if r is not None:
+            if r.tzinfo is None:
+                r = r.replace(tzinfo=_dt.timezone.utc)
+            return r
+    except (TypeError, ValueError):
+        pass
+    # ISO-8601: trim trailing Z and fractional seconds before strptime
+    iso = s.replace("Z", "+00:00")
+    for fmt in (
+        "%Y-%m-%dT%H:%M:%S%z",
+        "%Y-%m-%dT%H:%M:%S",
+        "%Y-%m-%dT%H:%M:%S.%f%z",
+        "%Y-%m-%dT%H:%M:%S.%f",
+        "%Y-%m-%d %H:%M:%S",
+        "%Y-%m-%d",
+        "%d/%m/%Y",
+        "%m/%d/%Y",
+        "%d %B %Y",
+        "%B %d, %Y",
+    ):
+        try:
+            r = _dt.datetime.strptime(iso, fmt)
+            if r.tzinfo is None:
+                r = r.replace(tzinfo=_dt.timezone.utc)
+            return r
+        except ValueError:
+            continue
+    return None
+
+
 def freshness_label(date_posted: str) -> str:
-    if not date_posted:
+    if not date_posted or date_posted == MISSING:
         return MISSING
     label = date_posted.strip().lower()
     now = time.time()
-    import datetime as _dt
-
-    parsed: Optional[_dt.datetime] = None
-    for fmt in ("%Y-%m-%d", "%Y-%m-%dT%H:%M:%S", "%Y-%m-%dT%H:%M:%S%z", "%d/%m/%Y"):
-        try:
-            parsed = _dt.datetime.strptime(date_posted[: len(_dt.datetime.now().strftime(fmt))], fmt)
-            break
-        except ValueError:
-            continue
+    parsed = _parse_date(date_posted)
     if parsed is None:
         for token, days in (("today", 0), ("just now", 0), ("hour", 0), ("day", 1), ("week", 7), ("month", 30)):
             if token in label:
                 return "fresh" if days <= 1 else "recent"
         return MISSING
     age_days = (now - parsed.timestamp()) / 86400
+    if age_days < 0:
+        # future-dated -> treat as fresh
+        return "fresh"
     if age_days <= 1:
         return "fresh"
     if age_days <= 7:

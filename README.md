@@ -75,26 +75,60 @@ block detection (403/429 + CAPTCHA markers) → log + skip source + continue.
   `missing_fields` — never fabricated.
 - The verifier follows `apply_url` redirects; if the page is unreachable or
   shows a "no longer accepting" marker, the job is marked `CLOSED` and excluded
-  from the Telegram push (still listed in the report).
+  from the Telegram push (still listed in the report). `validThrough` in the past
+  also marks `CLOSED` without a network call.
+
+## Authenticity & confidence scoring
+
+Each job gets a `confidence_score` (0-100) computed from:
+- field completeness (title/company/url/date/location/experience),
+- freshness (`fresh` > `recent` > `older` > `stale`),
+- employer-domain match — the resolved apply URL host is checked against the
+  company name; aggregator-only URLs (e.g. `remoteok.com` for "Pivotal Health")
+  are capped lower because the apply link is not the employer's ATS,
+- employer ATS sources (Greenhouse/Lever/career pages/USAJobs) get a boost.
+
+Telegram only pushes jobs with `confidence_score >= 50`, so weak/aggregator-only
+leads stay in the report but don't spam your phone.
+
+## Anti-bot (gated sources)
+
+Stealth-hardened Playwright: `--disable-blink-features=AutomationControlled`,
+realistic UA/locale/timezone, `playwright-stealth` when available (manual
+`navigator.webdriver` patch fallback), persistent login cookies per source,
+optional rotating proxies, jittered delays, scroll-to-load for lazy cards,
+resilient multi-selector fallbacks. On a hard block the scraper automatically
+retries with a mobile context; on a CAPTCHA it pauses for you to solve it
+manually (no automated solving, by design).
 
 ## Output
 
 Per run, under `reports/<timestamp>/`:
-- `report.html` — readable table with Apply buttons
-- `report.csv` — flat spreadsheet
+- `report.html` — readable table with Apply buttons + Score + Status + Domain
+- `report.csv` — flat spreadsheet (includes confidence/valid_through/domain)
 - `report.json` — full structured data
 
-Telegram (if configured) sends one card per genuinely-new, authentic job with a
-direct Apply button, plus the full CSV attached.
+Telegram (if configured) sends one card per genuinely-new, authentic,
+sufficient-confidence job with a direct Apply button, plus the full CSV attached.
 
-State: `jobs.db` (SQLite) stores `job_id_hash = sha1(normalize(title|company|location))`
-so reposts across sources collapse into one row; `first_seen_at` flags which
-are genuinely new this run.
+State: `jobs.db` (SQLite v2, auto-migrated from v1) stores
+`job_id_hash = sha1(normalize(title|company|location))` so reposts across
+sources collapse into one row; `first_seen_at` flags which are genuinely new.
+CLOSED jobs are pruned after 90 days of inactivity. CLOSED jobs are never
+alerted as "new".
+
+## Cost & rate safety
+
+LLM extraction is capped to a per-run budget (`DEFAULT_LLM_BUDGET=200`); once
+exceeded, remaining jobs use fast no-LLM extraction. Verify runs concurrently
+(throttle 6) to bound wall-clock. Each source degrades gracefully when its key
+is absent.
 
 ## Secrets & security
 
-All keys live in `.env` (gitignored, never committed). Required for full run;
-the harness degrades gracefully when a key is absent (that source is skipped).
+All keys live in `.env` (gitignored, never committed). The `cookies/` dir is
+gitignored and chmod-restricted where possible. Required for full run; the
+harness degrades gracefully when a key is absent (that source is skipped).
 
 ## Tests
 
@@ -103,15 +137,21 @@ python -m pip install pytest
 python -m pytest tests\ -q
 ```
 
-28 offline tests cover: no-hallucination extraction, RemoteOK parsing, dedupe,
-verifier CLOSED detection, matcher filters, report generation, and the full
+50 offline tests cover: no-hallucination extraction, RemoteOK parsing, dedupe +
+v1→v2 schema migration + retention pruning, verifier CLOSED/confidence/domain
+logic, freshness date parsing (RFC-2822/ISO-Z/offset/plain/future), the shared
+JobPosting JSON-LD parser, matcher filters, report generation, and the full
 end-to-end pipeline (no network needed).
 
 ## Honest limitations
 
-- "Genuine/authentic" means the posting page is reachable and fields are
-  source-derived — it cannot prove the employer's intent. Stated up front.
+- "Genuine/authentic" means the posting page is reachable, fields are
+  source-derived, and the apply URL resolves to the employer domain — it
+  cannot prove the employer's hiring intent beyond the posting itself.
 - LinkedIn/Glassdoor ToS: scraping risks account ban; use a secondary account
-  with the gated sources. Documented, not enforced.
+  with gated sources. By default these are off in the profile — enable
+  `linkedin`/`indeed`/`glassdoor` only when you're at the keyboard to solve any
+  CAPTCHA in the headed browser.
 - Google for Jobs and gated sources are detection-prone; a run may return fewer
-  results on a given day. The harness never fabricates to fill the gap.
+  results on a given day. The harness retries (mobile fallback) and never
+  fabricates results to fill the gap.

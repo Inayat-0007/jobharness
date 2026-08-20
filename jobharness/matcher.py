@@ -32,11 +32,6 @@ def matches_profile(job: Job, profile: Profile) -> bool:
         if not _matches_any(haystack_full, profile.keywords):
             return False
 
-    # Remote toggle
-    if profile.remote and not job.remote and not job.location.lower().startswith("remote"):
-        # accept if location mentions remote or across the world
-        if "remote" not in haystack and not job.remote:
-            pass  # don't hard reject; remote toggle is a preference, keep for ranking
     # Seniority
     if profile.seniority and job.seniority:
         if profile.seniority.lower() not in job.seniority.lower():

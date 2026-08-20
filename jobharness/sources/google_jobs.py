@@ -1,24 +1,23 @@
 from __future__ import annotations
 
-import json
-import re
-
-from bs4 import BeautifulSoup
+import time
 
 from .base import SourceAdapter
 from ..models import RawJob
 from ..profile import Profile
-from ..fetcher import make_client, random_delay
+from ..fetcher import make_client, blocked_response, random_delay
+from .jobposting_ld import extract_jobpostings_from_html, extract_jobpostings_from_blob
 
 
 GOOGLE_JOBS_URL = "https://www.google.com/search?q={query}&ibp=htl;jobs"
 
 
 class GoogleJobsAdapter(SourceAdapter):
-    """Best-effort scrape of Google's Jobs panel structured data.
+    """Best-effort scrape of Google's Jobs panel structured data (Tier 3).
 
-    Tier 3: JS-rendered, detection-prone. Extracts JobPosting JSON-LD / ls:data where
-    available; degrades gracefully (empty list) instead of inventing data.
+    JS-rendered and detection-prone: uses retry with jittered backoff and
+    falls back through (1) embedded JobPosting JSON-LD / @graph extraction,
+    (2) Google's embedded job-results JSON, then (3) empty. Never invents data.
     """
 
     name = "google_jobs"
@@ -28,53 +27,42 @@ class GoogleJobsAdapter(SourceAdapter):
         loc = profile.location or ("remote" if profile.remote else "")
         if loc:
             query += "+" + loc.replace(" ", "+")
-        url = GOOGLE_JOBS_URL.format(query=query)
-        random_delay()
         out: list[RawJob] = []
+        for attempt in range(3):
+            random_delay(1.0, 3.0)
+            out = self._fetch_once(query)
+            if out:
+                return out
+            # backoff before retrying
+            if attempt < 2:
+                time.sleep(2 ** attempt)
+        return out
+
+    def _fetch_once(self, query: str) -> list[RawJob]:
+        url = GOOGLE_JOBS_URL.format(query=query)
         with make_client() as client:
             try:
                 resp = client.get(url)
             except Exception:
-                return out
-            if resp.status_code != 200:
-                return out
-            text = resp.text or ""
-        # Google embeds jobs data in scripts as JSON containing "JobPosting" objects.
-        for match in re.findall(r"(\{\"[^{}]*JobPosting.*?\})", text):
+                return []
+            if resp.status_code != 200 or blocked_response(resp):
+                return []
+            html = resp.text or ""
+        # Path 1: proper schema.org JobPosting JSON-LD blocks.
+        out = extract_jobpostings_from_html(html, self.name, url)
+        if out:
+            return out
+        # Path 2: Google embeds job results inside <script> blobs that contain
+        # JobPosting objects (sometimes escaped JSON)..Scan for any JSON object
+        # containing a "JobPosting" type marker.
+        import json
+        import re
+
+        out2: list[RawJob] = []
+        for m in re.finditer(r"\{[^{}]*JobPosting[^{}]*\}", html):
             try:
-                blob = json.loads(match)
+                blob = json.loads(m.group(0))
             except json.JSONDecodeError:
                 continue
-            out.append(self._from_blob(blob, url))
-        # Fallback: regex over JSON-LD script tags rendered server-side
-        soup = BeautifulSoup(text, "lxml")
-        for script in soup.select('script[type="application/ld+json"]'):
-            try:
-                blob = json.loads(script.string or "{}")
-            except (json.JSONDecodeError, TypeError):
-                continue
-            postings = blob if isinstance(blob, list) else [blob]
-            for bp in postings:
-                if bp.get("@type") not in ("JobPosting", ["JobPosting"]):
-                    continue
-                out.append(self._from_blob(bp, url))
-        return out
-
-    def _from_blob(self, ld: dict, base_url: str) -> RawJob:
-        org = ld.get("hiringOrganization") or {}
-        company = org.get("name", "") if isinstance(org, dict) else ""
-        loc = ld.get("jobLocation") or {}
-        loc_str = ""
-        if isinstance(loc, dict):
-            a = loc.get("address", {})
-            loc_str = ", ".join(str(v) for v in (a.get("addressLocality"), a.get("addressRegion")) if v)
-        return RawJob(
-            source_name=self.name,
-            source_url=ld.get("url", base_url),
-            title=ld.get("title", ""),
-            company=company,
-            location=loc_str,
-            description=ld.get("description", ""),
-            posted_date=ld.get("datePosted", ""),
-            apply_url=ld.get("url", ""),
-        )
+            out2.extend(extract_jobpostings_from_blob(blob, self.name, url))
+        return out2
