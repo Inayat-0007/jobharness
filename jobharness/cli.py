@@ -5,6 +5,7 @@ import sys
 from pathlib import Path
 
 from . import secrets
+from .dashboard import build_dashboard
 from .profile import load_profile, make_demo_profile
 from .runner import run_once
 
@@ -24,6 +25,10 @@ def build_parser() -> argparse.ArgumentParser:
     r.add_argument("--no-verify", action="store_true", help="Skip apply-URL reachability check.")
     r.add_argument("--no-push", action="store_true", help="Skip Telegram push.")
     r.add_argument("--dry-run", action="store_true", help="Alias for --no-verify --no-push.")
+
+    d = sub.add_parser("dashboard", help="Regenerate the all-runs HTML dashboard.")
+    d.add_argument("--reports", default=str(PROJECT_ROOT / "reports"))
+    d.add_argument("--out", default=str(PROJECT_ROOT / "reports" / "dashboard.html"))
     return p
 
 
@@ -53,6 +58,13 @@ def main(argv: list[str] | None = None) -> int:
             push_telegram=push,
         )
         _print_summary(result)
+        return 0
+
+    if args.command == "dashboard":
+        res = build_dashboard(args.reports, args.out)
+        print(f"[jobharness] dashboard -> {res['out']}")
+        print(f"  runs: {res['runs']}  jobs: {res['jobs']}")
+        print(f"  new: {res['stats']['new_count']}  closed: {res['stats']['closed_count']}  avg match: {res['stats']['avg_match']}")
         return 0
 
     return 1

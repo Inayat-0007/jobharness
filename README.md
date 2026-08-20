@@ -24,6 +24,9 @@ notepad profiles\demo.yaml
 # 4. Run one harvest pass
 python -m jobharness run --profile profiles\demo.yaml
 
+# 5. Regenerate the all-runs dashboard (aggregates every report)
+python -m jobharness dashboard
+
 # Dry-run (no URL verification, no Telegram push) — fast, offline-safe
 python -m jobharness run --source remoteok --top 5 --dry-run --no-llm
 
@@ -145,6 +148,20 @@ Per run, under `reports/<timestamp>/`:
 - `report.csv` — flat spreadsheet (includes decision, identity/authenticity/
   match scores, evidence, reasons, canonical ids)
 - `report.json` — full structured data
+
+`python -m jobharness dashboard` (or `jobharness dashboard`) regenerates
+`reports/dashboard.html` — a single self-contained page (no external
+dependencies, works offline) aggregating **all** runs under `reports/`:
+
+- Stat cards: unique jobs (deduped by `job_id_hash`, latest record wins),
+  genuinely new, closed, remote, average match, authentic count
+- Decision / source / status distribution bars
+- Live filters: search, decision, status, source, remote-only, new-only
+- Sortable columns; click any row for a detail drawer with every stored field
+  (scores, evidence, negative evidence, reasons, missing fields, plain-text
+  description, apply/source/canonical links, hashes, block keys, timestamps)
+
+The dashboard is regenerated on demand after each run — no server needed.
 
 Telegram (if configured) sends one card per AUTO_ACCEPT genuinely-new job with
 a direct Apply button (card shows decision + top reason), plus the full CSV
