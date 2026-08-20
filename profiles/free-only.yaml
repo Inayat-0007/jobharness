@@ -1,0 +1,33 @@
+name: free-only
+roles:
+  - Backend Engineer
+  - Software Engineer
+keywords:
+  - python
+excludes:
+  - manager
+  - director
+location: ""
+remote: true
+seniority: ""
+salary_floor: null
+company_allowlist:
+  - airbnb
+  - stripe
+  - lever
+sources:
+  remoteok: true
+  weworkremotely: true
+  remotive: true
+  jobicy: false
+  adzuna: false
+  usajobs: false
+  greenhouse: true
+  lever: true
+  career_page_generic: false
+  google_jobs: false
+  linkedin: false
+  indeed: false
+  glassdoor: false
+llm_provider: gemini
+top_n: 50
