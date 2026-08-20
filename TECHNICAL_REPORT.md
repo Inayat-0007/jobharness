@@ -4,13 +4,13 @@
 
 | Item | Value |
 |---|---|
-| **Report generated** | 2026-08-21 04:22 IST (Asia/Kolkata, UTC+05:30) |
-| **Last activity in repo** | 2026-08-21 04:21 IST (commit `c7b092d`) |
+| **Report generated** | 2026-08-21 04:42 IST (Asia/Kolkata, UTC+05:30) |
+| **Last activity in repo** | 2026-08-21 04:40 IST (commit `9f1406f`) |
 | **Host platform** | Windows (PowerShell 5.1), x64 |
 | **Working directory** | `C:\Users\moham\jobharness` |
 | **Project** | `jobharness` v0.1.0 — "On-demand job harvest harness" |
 | **Python requirement** | `>=3.10` |
-| **Single author** | `Inayat-0007` (5 commits) |
+| **Single author** | `Inayat-0007` (6 commits) |
 | **Python runtime** | All modules import cleanly; local `.venv` used |
 
 ---
@@ -31,7 +31,7 @@ Untracked files:
 - **Untracked, intentionally:** `profiles/my-target.yaml` — the user's personal target profile (roles: Python Developer/Backend Engineer; keywords python/django/fastapi; excludes manager/senior/frontend/java) and `.kilo/` (Kilo tool config — plans/commands, not project code). Both stay out of the repo.
 - `jobs.db` / `reports/` remain gitignored (runtime state).
 
-### 1.3 Commit History (5 commits, all 2026-08-21)
+### 1.3 Commit History (6 commits, all 2026-08-21)
 
 | Commit | Time (IST) | Summary | Size |
 |---|---|---|---|
@@ -39,13 +39,15 @@ Untracked files:
 | `a62f940` | 02:16 | Fix documented limitations + harden authenticity, scrapers, DB | +1139/-301 |
 | `f16cd6b` | 02:21 | Fix Greenhouse dict departments + SETUP.md + free-only profile | +328 |
 | `ca0ff6e` | 02:53 | Fix date parsing, company allowlist split, cross-source dedup, HTML escaping; add tests | +537/-69 |
-| `c7b092d` (HEAD) | 04:21 | **Identity/authenticity/relevance upgrade:** `algo.py`, URL canonicalization, fuzzy dedup + SQLite v3, three-score model, decision engine, evidence/source statuses, Phase-4 evaluation package | +4711 |
+| `c7b092d` | 04:21 | **Identity/authenticity/relevance upgrade:** `algo.py`, URL canonicalization, fuzzy dedup + SQLite v3, three-score model, decision engine, evidence/source statuses, Phase-4 evaluation package | +4711 |
+| `9f1406f` (HEAD) | 04:40 | **All-runs HTML dashboard:** aggregate every `reports/*/report.json`, stats + filters + sortable table + full-detail drawer, `jobharness dashboard` CLI, 4 tests | +488 |
 
 ### 1.4 Repository Metrics
-- **Source:** 62 Python files, ~4,711 lines (`jobharness/`)
-- **Tests:** 27 Python files, ~2,189 lines (`tests/`)
-- **Test result (just executed):** `166 passed in ~3.2s` — all green, all offline
+- **Source:** 63 Python files, ~5,200 lines (`jobharness/`)
+- **Tests:** 28 Python files, ~2,280 lines (`tests/`)
+- **Test result (just executed):** `170 passed in ~2.7s` — all green, all offline
 - **New packages added in `c7b092d`:** `identity/`, `evidence/`, `scoring/`, `evaluation/` (each purely additive; no existing module reorganized)
+- **New module added in `9f1406f`:** `dashboard.py` (self-contained all-runs dashboard generator; pure Jinja2 + stdlib, zero new dependencies)
 
 ---
 
@@ -80,6 +82,10 @@ jobharness/
 ├── dedupe.py           SQLite store v3: migration, upsert, find_candidates,
 │                       fuzzy_lookup, merge, 90-day CLOSED pruning
 ├── report.py           Jinja2 HTML (Decision column) + CSV (34 cols) + JSON writers
+├── dashboard.py        ★ all-runs dashboard: aggregates every reports/*/report.json
+│                       (dedupe by job_id_hash, latest wins) -> single self-contained
+│                       HTML page: stats cards, decision/source/status bars, live
+│                       filters, sortable table, full-detail drawer (every field)
 ├── registry.py         adapter registry -> enabled_adapters(profile)
 ├── fetcher.py          httpx client, UA pool, proxies, block detection + classify_response
 ├── browser.py          stealth Playwright factory, CAPTCHA gate, cookie persistence
@@ -118,6 +124,7 @@ jobharness/
 9. **Ranking** — `(decision rank: AUTO_ACCEPT > REVIEW > REJECT/"")`, then `match_score` (fallback `confidence_score`), then freshness, then `first_seen_at` desc.
 10. **Reports** — `report.html` (Decision column + top reason) / `.csv` (34 columns) / `.json` under `reports/<run_ts>/`.
 11. **Push** — one Telegram card per `decision == AUTO_ACCEPT` AND `genuinely_new` AND not CLOSED, plus the CSV attachment. Summary prints decision counts and per-source statuses.
+12. **Dashboard (on demand)** — `python -m jobharness dashboard` walks every `reports/<run_ts>/report.json` (8 runs so far), dedupes cross-run by `job_id_hash` (latest record wins, keeps `_run_ts`), and renders `reports/dashboard.html` — a single self-contained page with stat cards (unique jobs, new, closed, remote, avg match, authentic), distribution bars (decision/source/status), live search + filters (decision, status, source, remote-only, new-only), sortable columns, and a click-to-open detail drawer exposing **every** stored field (three scores, evidence, negative evidence, reasons, missing fields, plain-text description via BeautifulSoup, apply/source/canonical links, hashes, block keys, timestamps). Offline-safe: no CDN, no server.
 
 ---
 
@@ -218,6 +225,8 @@ Unchanged (13 adapters in 4 tiers): Tier 1 API/RSS (remoteok, weworkremotely, re
 
 **Reports** (`reports/<ts>/`): Jinja2 HTML (autoescape on) with a **Decision column** + top reason; CSV now **34 columns** (adds decision, identity/authenticity/match scores, `matched_via`, `possible_duplicate_of`, `canonical_job_id`, `block_key`, `evidence`, `negative_evidence`, `reason`); JSON full `asdict` dump.
 
+**Dashboard** (`reports/dashboard.html`, generated by `jobharness dashboard`): aggregates all 8 historical runs into 72 unique jobs (cross-run dedup by `job_id_hash`, latest state wins). Verified generated output: stat cards (71 new / 0 closed / avg match 0.57), decision/source/status bars, and the embedded job blob is strict JSON (`<\/`-escaped, no autoescape breakage — the script-embedded data is rendered `|safe` after `json.dumps`). Descriptions are stripped to plain text (BeautifulSoup, `html.parser`) before embedding, so no raw HTML or `</script>` can break the page.
+
 **Live run (2026-08-21 04:20, `reports/20260821-042027/`):** remoteok fetched 100 raw, 1 matched ("Senior Software Engineer Case Execution" @ Pivotal Health) — `decision=REVIEW`, `identity_score=1.0` (exact duplicate of a stored row, `matched_via=exact`), `authenticity_score=42`, `match_score=0.57`, reasons `[application is active, recently posted, relevance medium, authenticity medium]`. **0 genuinely new** — cross-run dedup correctly suppressed the repeat.
 
 **Telegram** (`notify/telegram.py`): HTML parse mode with escaping on all fields; card now shows **Decision + top reason**; **push gate = `decision == AUTO_ACCEPT` AND `genuinely_new` AND not CLOSED** (was `confidence_score >= 50`). Fuzzy-merged (HIGH) and REVIEW jobs never alert — conservative by design. CSV attachment still sent every run.
@@ -235,12 +244,13 @@ Unchanged (13 adapters in 4 tiers): Tier 1 API/RSS (remoteok, weworkremotely, re
 
 ---
 
-## 13. TEST SUITE — `166 passed in ~3.2s`
+## 13. TEST SUITE — `170 passed in ~2.7s`
 
-Coverage map (27 files; 91 tests added in this upgrade):
+Coverage map (28 files; 4 tests added in the dashboard commit, 91 in the scoring upgrade):
 
 | Area | Files |
 |---|---|
+| Dashboard (cross-run dedup by hash, stats, HTML build, HTML-stripping of descriptions) | `test_dashboard` |
 | Algorithms (JW edge cases, composite verdicts, company rule table, blocking keys, BM25, features, fingerprint) | `test_algo` |
 | URL canonicalization (utm/tracking strip, idempotence, domain) | `test_urlutil` |
 | Dedupe v3 (v2→v3 migration, v1 rebuild, upsert new columns, fuzzy HIGH/MEDIUM/LOW, merge) | `test_dedupe_v3` |
@@ -281,7 +291,8 @@ All offline — network mocked or fixture-driven.
 - Add ruff/mypy to the `dev` extra.
 - Populate/remove `RawJob.raw_html`; surface LLM extraction warnings.
 - `--since`/incremental mode + scheduler wrapper for true automation.
+- Dashboard polish: export filtered view to CSV, per-run comparison chart, light/dark theme toggle.
 
 ---
 
-*Report compiled from live repository state, full source read, DB inspection (v3 migration verified on a copy), a fresh `pytest` run (166 passed), and a live harvest run (remoteok, 100 raw → 1 matched, 0 new). All facts verified as of 2026-08-21 04:22 IST.*
+*Report compiled from live repository state, full source read, DB inspection (v3 migration verified on a copy), a fresh `pytest` run (170 passed), and a live harvest run (remoteok, 100 raw → 1 matched, 0 new). All facts verified as of 2026-08-21 04:42 IST.*
