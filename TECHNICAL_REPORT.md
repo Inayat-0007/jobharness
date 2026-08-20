@@ -4,13 +4,13 @@
 
 | Item | Value |
 |---|---|
-| **Report generated** | 2026-08-21 04:42 IST (Asia/Kolkata, UTC+05:30) |
-| **Last activity in repo** | 2026-08-21 04:40 IST (commit `9f1406f`) |
+| **Report generated** | 2026-08-21 04:48 IST (Asia/Kolkata, UTC+05:30) |
+| **Last activity in repo** | 2026-08-21 04:40 IST (commit `65ba149`) |
 | **Host platform** | Windows (PowerShell 5.1), x64 |
 | **Working directory** | `C:\Users\moham\jobharness` |
 | **Project** | `jobharness` v0.1.0 — "On-demand job harvest harness" |
 | **Python requirement** | `>=3.10` |
-| **Single author** | `Inayat-0007` (6 commits) |
+| **Single author** | `Inayat-0007` (7 commits) |
 | **Python runtime** | All modules import cleanly; local `.venv` used |
 
 ---
@@ -31,7 +31,7 @@ Untracked files:
 - **Untracked, intentionally:** `profiles/my-target.yaml` — the user's personal target profile (roles: Python Developer/Backend Engineer; keywords python/django/fastapi; excludes manager/senior/frontend/java) and `.kilo/` (Kilo tool config — plans/commands, not project code). Both stay out of the repo.
 - `jobs.db` / `reports/` remain gitignored (runtime state).
 
-### 1.3 Commit History (6 commits, all 2026-08-21)
+### 1.3 Commit History (7 commits, all 2026-08-21)
 
 | Commit | Time (IST) | Summary | Size |
 |---|---|---|---|
@@ -40,7 +40,8 @@ Untracked files:
 | `f16cd6b` | 02:21 | Fix Greenhouse dict departments + SETUP.md + free-only profile | +328 |
 | `ca0ff6e` | 02:53 | Fix date parsing, company allowlist split, cross-source dedup, HTML escaping; add tests | +537/-69 |
 | `c7b092d` | 04:21 | **Identity/authenticity/relevance upgrade:** `algo.py`, URL canonicalization, fuzzy dedup + SQLite v3, three-score model, decision engine, evidence/source statuses, Phase-4 evaluation package | +4711 |
-| `9f1406f` (HEAD) | 04:40 | **All-runs HTML dashboard:** aggregate every `reports/*/report.json`, stats + filters + sortable table + full-detail drawer, `jobharness dashboard` CLI, 4 tests | +488 |
+| `9f1406f` | 04:40 | **All-runs HTML dashboard:** aggregate every `reports/*/report.json`, stats + filters + sortable table + full-detail drawer, `jobharness dashboard` CLI, 4 tests | +488 |
+| `65ba149` (HEAD) | 04:40 | Update technical report + README for the dashboard (metadata, architecture map, pipeline step 12, section 11, test map, risks/next-steps mirrored into README) | +22/-11 |
 
 ### 1.4 Repository Metrics
 - **Source:** 63 Python files, ~5,200 lines (`jobharness/`)
@@ -295,4 +296,4 @@ All offline — network mocked or fixture-driven.
 
 ---
 
-*Report compiled from live repository state, full source read, DB inspection (v3 migration verified on a copy), a fresh `pytest` run (170 passed), and a live harvest run (remoteok, 100 raw → 1 matched, 0 new). All facts verified as of 2026-08-21 04:42 IST.*
+*Report compiled from live repository state, full source read, DB inspection (v3 migration verified on a copy), a fresh `pytest` run (170 passed), and a live harvest run (remoteok, 100 raw → 1 matched, 0 new). All facts verified as of 2026-08-21 04:48 IST.*

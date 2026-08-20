@@ -195,13 +195,71 @@ python -m pip install pytest
 python -m pytest tests\ -q
 ```
 
-166 offline tests cover: no-hallucination extraction, RemoteOK parsing, dedupe +
+170 offline tests cover: no-hallucination extraction, RemoteOK parsing, dedupe +
 v1→v2→v3 schema migration + retention pruning, verifier CLOSED/confidence/domain
 logic, freshness date parsing (RFC-2822/ISO-Z/offset/plain/future), the shared
-JobPosting JSON-LD parser, matcher filters, report generation, full end-to-end
-pipeline, cross-run fuzzy dedup, identity/posting-id extraction, evidence
-signals + source statuses, BM25 matching + decision engine, and the evaluation
-benchmark dataset + metrics (no network needed).
+JobPosting JSON-LD parser, matcher filters, report generation, the all-runs
+dashboard builder, full end-to-end pipeline, cross-run fuzzy dedup,
+identity/posting-id extraction, evidence signals + source statuses, BM25
+matching + decision engine, and the evaluation benchmark dataset + metrics
+(no network needed).
+
+## Docs
+
+- `TECHNICAL_REPORT.md` — master technical report: architecture map, full
+  pipeline walkthrough, data model, scoring model, dedup v3 schema, evaluation,
+  test coverage map, and honest risks/gaps + next steps.
+
+## Honest limitations
+
+- "Genuine/authentic" means the posting page is reachable, fields are
+  source-derived, and the apply URL resolves to the employer domain — it
+  cannot prove the employer's hiring intent beyond the posting itself.
+- LinkedIn/Glassdoor ToS: scraping risks account ban; use a secondary account
+  with gated sources. By default these are off in the profile — enable
+  `linkedin`/`indeed`/`glassdoor` only when you're at the keyboard to solve any
+  CAPTCHA in the headed browser.
+- Google for Jobs and gated sources are detection-prone; a run may return fewer
+  results on a given day. The harness retries (mobile fallback) and never
+  fabricates results to fill the gap.
+
+## Risks & known gaps (honest)
+
+1. **Thresholds are untuned heuristics** — TITLE_FLOOR/HIGH/REVIEW and the
+   decision thresholds are starting points; Phase 4 labeled data + benchmark
+   must validate/tune them before they're trusted at scale.
+2. **Fuzzy merge needs descriptions** — cross-run HIGH merges rely on stored
+   `description`; pre-v3 rows (NULL description) fall back to neutral desc
+   similarity → conservative REVIEW instead of merge (safe, but re-alerts are
+   possible for title-rewritten repeats).
+3. **Backend vs Frontend discrimination** — Jaro-Winkler alone scores them
+   0.79 (above the 0.75 title floor); separation relies on description
+   similarity, so identical boilerplate descriptions across genuinely
+   different roles remain a boundary risk to validate with the labeled dataset.
+4. **Fewer Telegram alerts** — REVIEW-heavy aggregator jobs (authority 2 →
+   authenticity ~40s) rarely reach AUTO_ACCEPT; intentional, but expect quieter
+   push.
+5. **`profiles/my-target.yaml` / `.kilo/` untracked** — intentional; keep them
+   out of commits.
+6. **Windows-only note** — `browser.py` chmod is a no-op on win32; the CAPTCHA
+   gate blocks the CLI thread on `input()` (expected for the headed workflow).
+7. **No lint/typecheck config** — no ruff/mypy in `pyproject.toml`; only
+   pytest (plan: add only if requested).
+8. **All keys empty in `.env`** — LLM extraction + Telegram push are dormant
+   until secrets are configured.
+
+## Suggested next steps
+
+- Collect an independently labeled duplicate dataset from real reports; extend
+  `evaluation/dataset.py`; run `python -m jobharness.evaluation.benchmark` to
+  tune thresholds.
+- Consider a `description` backfill for pre-v3 rows from
+  `reports/*/report.json` on migration.
+- Add ruff/mypy to the `dev` extra.
+- Populate/remove `RawJob.raw_html`; surface LLM extraction warnings.
+- `--since`/incremental mode + scheduler wrapper for true automation.
+- Dashboard polish: export filtered view to CSV, per-run comparison chart,
+  light/dark theme toggle.
 
 ## Optional extras
 
