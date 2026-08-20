@@ -5,9 +5,12 @@ import datetime as dt
 import json
 from pathlib import Path
 
-from jinja2 import Template
+from jinja2 import Environment, select_autoescape
 
 from .models import Job
+
+_env = Environment(autoescape=select_autoescape(["html", "xml"]))
+_env.trim_blocks = True
 
 REPORT_HTML = """<!doctype html>
 <html lang="en"><head><meta charset="utf-8">
@@ -78,7 +81,7 @@ def write_reports(jobs: list[Job], out_dir: str | Path, run_ts: str | None = Non
 
     html_path = d / "report.html"
     html_path.write_text(
-        Template(REPORT_HTML).render(
+        _env.from_string(REPORT_HTML).render(
             jobs=jobs, run_ts=ts, new_count=new_count, closed_count=closed_count
         ),
         encoding="utf-8",

@@ -14,7 +14,13 @@ location: ""
 remote: true
 seniority: mid
 salary_floor: null
-company_allowlist: []
+greenhouse_boards:
+  - airbnb
+  - stripe
+lever_boards:
+  - lever
+  - stripe
+career_pages: []
 sources:
   remoteok: true
   weworkremotely: true

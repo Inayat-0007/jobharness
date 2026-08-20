@@ -39,7 +39,7 @@ class RemoteOKAdapter(SourceAdapter):
                     company=company,
                     location=location,
                     description=j.get("description", ""),
-                    posted_date=str(j.get("date", "")),
+                    posted_date=j.get("date") or "",
                     apply_url=apply_url,
                     extra={"tags": tags, "salary": j.get("salary", ""), "logo": j.get("logo", "")},
                 )

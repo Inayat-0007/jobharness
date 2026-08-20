@@ -10,14 +10,15 @@ class GreenhouseAdapter(SourceAdapter):
     name = "greenhouse"
 
     def fetch(self, profile: Profile) -> list[RawJob]:
-        raw_boards = profile.company_allowlist or ["airbnb", "stripe"]
+        raw_boards = profile.greenhouse_boards or [
+            b for b in (getattr(profile, "company_allowlist", []) or []) if isinstance(b, str)
+        ] or ["airbnb", "stripe"]
         boards = []
         for b in raw_boards:
             if isinstance(b, dict):
                 slug = b.get("board") or b.get("slug") or b.get("company", "")
                 if slug:
                     boards.append(str(slug))
-
             elif isinstance(b, str):
                 boards.append(b)
         out: list[RawJob] = []

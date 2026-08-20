@@ -1,11 +1,23 @@
 from __future__ import annotations
 
+import re
+
 import feedparser
 
 from ..base import SourceAdapter
 from ...models import RawJob
 from ...profile import Profile
 from ...fetcher import make_client
+
+
+_COMPANY_TITLE_RE = re.compile(r"^(?P<company>.+?)\s*[-\u2013]\s*(?P<title>.+)$")
+
+
+def _company_from_title(title: str) -> str:
+    if not title:
+        return ""
+    m = _COMPANY_TITLE_RE.match(title.strip())
+    return (m.group("company") or "").strip() if m else ""
 
 
 class RemotiveAdapter(SourceAdapter):
@@ -24,9 +36,9 @@ class RemotiveAdapter(SourceAdapter):
             link = entry.get("link") or ""
             summary = entry.get("summary", "")
             posted = entry.get("published", "")
-            company = ""
-            if hasattr(entry, "tags") and entry.get("author"):
-                company = entry.get("author", "")
+            company = (entry.get("author") or "").strip()
+            if not company:
+                company = _company_from_title(title)
             out.append(
                 RawJob(
                     source_name=self.name,

@@ -17,7 +17,10 @@ class Profile:
     remote: bool = True
     seniority: str = ""                                # e.g. "mid", "senior", "junior"
     salary_floor: Optional[int] = None
-    company_allowlist: list = field(default_factory=list)
+    company_allowlist: list = field(default_factory=list)  # DEPRECATED alias -> greenhouse/lever boards
+    greenhouse_boards: list = field(default_factory=list)   # list[str] of Greenhouse board slugs
+    lever_boards: list = field(default_factory=list)         # list[str] of Lever board slugs
+    career_pages: list = field(default_factory=list)        # list[{company,url}|str] of seed career-page URLs
     sources: dict = field(default_factory=dict)        # {source_name: bool}
     llm_provider: str = "gemini"
     top_n: int = 50
@@ -40,6 +43,35 @@ def default_sources() -> dict:
     }
 
 
+def _migrate_allowlist(data: dict) -> None:
+    """Backward-compat: feed the deprecated `company_allowlist` into the split
+    greenhouse_boards / lever_boards / career_pages fields when those are absent.
+    string slugs -> greenhouse+lever; {company,url} dicts -> career_pages.
+    """
+    if any(k in data for k in ("greenhouse_boards", "lever_boards", "career_pages")):
+        data.setdefault("greenhouse_boards", data.get("greenhouse_boards") or [])
+        data.setdefault("lever_boards", data.get("lever_boards") or [])
+        data.setdefault("career_pages", data.get("career_pages") or [])
+        return
+    raw = data.get("company_allowlist") or []
+    gh, lv, cp = [], [], []
+    for item in raw:
+        if isinstance(item, dict):
+            url = item.get("url")
+            if url:
+                cp.append(item)
+            slug = item.get("board") or item.get("slug") or item.get("company", "")
+            if slug:
+                gh.append(str(slug))
+                lv.append(str(slug))
+        elif isinstance(item, str):
+            gh.append(item)
+            lv.append(item)
+    data["greenhouse_boards"] = gh
+    data["lever_boards"] = lv
+    data["career_pages"] = cp
+
+
 def load_profile(path: str | Path) -> Profile:
     p = Path(path)
     if not p.exists():
@@ -54,6 +86,7 @@ def load_profile(path: str | Path) -> Profile:
         data["sources"] = merged
     if "remote" not in data:
         data["remote"] = True
+    _migrate_allowlist(data)
     return Profile(**{k: v for k, v in data.items() if k in Profile.__dataclass_fields__})
 
 
@@ -68,7 +101,9 @@ def save_profile(profile: Profile, path: str | Path) -> None:
         "remote": profile.remote,
         "seniority": profile.seniority,
         "salary_floor": profile.salary_floor,
-        "company_allowlist": profile.company_allowlist,
+        "greenhouse_boards": profile.greenhouse_boards,
+        "lever_boards": profile.lever_boards,
+        "career_pages": profile.career_pages,
         "sources": profile.sources,
         "llm_provider": profile.llm_provider,
         "top_n": profile.top_n,

@@ -1,9 +1,8 @@
 from __future__ import annotations
 
-import datetime as dt
 import re
 
-from .models import RawJob, Job, MISSING, VALID_AUTHENTIC
+from .models import RawJob, Job, MISSING, VALID_AUTHENTIC, _parse_date
 from .llm import provider as llm
 
 
@@ -42,25 +41,17 @@ def _coerce_keywords(v) -> list:
     return []
 
 
-def normalize_date(raw: str) -> str:
-    if not raw or raw == MISSING:
+def normalize_date(raw: str | int | None) -> str:
+    """Return a normalized 'YYYY-MM-DD' string, or '' if unparseable/missing.
+
+    Handles epoch seconds (10 digits) / milliseconds (13 digits), RFC-2822,
+    ISO-8601 (with Z / offset / fractional), and plain dates via models._parse_date.
+    Never invents a date.
+    """
+    if raw is None:
         return ""
-    s = raw.strip()
-    for fmt in (
-        "%Y-%m-%dT%H:%M:%S%z",
-        "%Y-%m-%dT%H:%M:%S",
-        "%Y-%m-%dT%H:%M:%S.%fZ",
-        "%Y-%m-%d",
-        "%a, %d %b %Y %H:%M:%S %z",
-        "%a, %d %b %Y %H:%M:%S GMT",
-        "%d/%m/%Y",
-        "%m/%d/%Y",
-    ):
-        try:
-            return dt.datetime.strptime(s[: len(dt.datetime.now().strftime(fmt)) or len(s)], fmt).strftime("%Y-%m-%d")
-        except ValueError:
-            continue
-    return s
+    parsed = _parse_date(str(raw))
+    return parsed.strftime("%Y-%m-%d") if parsed is not None else ""
 
 
 def extract(raw: RawJob, use_llm: bool = True, llm_provider: str = "gemini") -> Job:

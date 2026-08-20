@@ -10,7 +10,9 @@ class LeverAdapter(SourceAdapter):
     name = "lever"
 
     def fetch(self, profile: Profile) -> list[RawJob]:
-        raw_boards = profile.company_allowlist or ["lever", "stripe"]
+        raw_boards = profile.lever_boards or [
+            b for b in (getattr(profile, "company_allowlist", []) or []) if isinstance(b, str)
+        ] or ["lever", "stripe"]
         boards = []
         for b in raw_boards:
             if isinstance(b, dict):

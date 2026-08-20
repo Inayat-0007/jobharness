@@ -1,5 +1,7 @@
 from __future__ import annotations
 
+import html as _html
+
 import httpx
 
 from .. import secrets
@@ -24,13 +26,14 @@ def send_card(job: Job) -> bool:
     if not token or not chat:
         return False
     role = job.role or job.title
+    loc = job.location or ""
     text = (
-        f"*{role}*\n"
-        f"@ {job.company} | {job.location}{' (Remote)' if job.remote else ''}\n"
-        f"Posted: {job.date_posted or '-'} ({job.freshness})\n"
-        f"Exp: {job.experience_needed or '-'} | Salary: {job.salary_if_present or '-'}\n"
-        f"Source: {job.source_name}\n"
-        f"[Apply directly]({job.apply_url_direct})"
+        f"<b>{_html.escape(role)}</b>\n"
+        f"@ {_html.escape(job.company)} | {_html.escape(loc)}{' (Remote)' if job.remote else ''}\n"
+        f"Posted: {_html.escape(job.date_posted)} ({_html.escape(job.freshness or '')})\n"
+        f"Exp: {_html.escape(job.experience_needed or '-')} | Salary: {_html.escape(job.salary_if_present or '-')}\n"
+        f"Source: {_html.escape(job.source_name or '')} | Score: {job.confidence_score}\n"
+        f'<a href="{_html.escape(job.apply_url_direct, quote=True)}">Apply directly</a>'
     )
     url = f"https://api.telegram.org/bot{token}/sendMessage"
     try:
@@ -40,13 +43,18 @@ def send_card(job: Job) -> bool:
                 json={
                     "chat_id": chat,
                     "text": text,
-                    "parse_mode": "Markdown",
+                    "parse_mode": "HTML",
                     "disable_web_page_preview": False,
                 },
             )
+            if resp.status_code != 200:
+                snippet = (resp.text or "")[:140]
+                print(f"[telegram] sendMessage failed: HTTP {resp.status_code} {snippet}")
             return resp.status_code == 200
-    except httpx.HTTPError:
+    except httpx.HTTPError as e:
+        print(f"[telegram] sendMessage network error: {e}")
         return False
+
 
 
 def send_file(path: str, caption: str = "") -> bool:

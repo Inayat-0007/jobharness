@@ -65,12 +65,13 @@ def run_once(
             print(f"[jobharness] {name}: {len(jobs)} raw")
 
     # Extract + match. LLM extraction is capped to llm_budget jobs; the rest use
-    # fast no-LLM extraction to bound API cost. Dedup by raw title+company first
-    # so the budget targets unique postings.
+    # fast no-LLM extraction to bound API cost. Pre-dedup by title+company (NOT
+    # source) so the same posting found via two sources collapses to one LLM
+    # extraction and one alert, not two.
     seen_keys = set()
     unique_raws: list[RawJob] = []
     for raw in raw_jobs:
-        key = (raw.source_name, (raw.title or "").lower(), (raw.company or "").lower())
+        key = ((raw.title or "").lower(), (raw.company or "").lower())
         if key in seen_keys:
             continue
         seen_keys.add(key)

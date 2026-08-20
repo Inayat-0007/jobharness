@@ -16,18 +16,24 @@ class AdzunaAdapter(SourceAdapter):
         if not app_id or not app_key:
             return []
         what = " ".join(profile.roles[:1] + profile.keywords[:3]) or "developer"
+        if profile.remote and "remote" not in what.lower():
+            what = what + " remote"
         country = "us"
-        url = (
-            f"https://api.adzuna.com/v1/api/jobs/{country}/search/1"
-            f"?app_id={app_id}&app_key={app_key}"
-            f"&results_per_page=50&what={what}&max_days_old=7"
-        )
-        if profile.remote:
-            url += "&full_time=1"
+        params = {
+            "app_id": app_id,
+            "app_key": app_key,
+            "results_per_page": 50,
+            "what": what,
+            "max_days_old": 7,
+            "sort_by": "date",
+        }
         random_delay()
         out: list[RawJob] = []
         with make_client() as client:
-            resp = client.get(url)
+            resp = client.get(
+                f"https://api.adzuna.com/v1/api/jobs/{country}/search/1",
+                params=params,
+            )
             if blocked_response(resp):
                 return out
             try:

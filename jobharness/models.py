@@ -85,13 +85,22 @@ class Job:
         self.missing_fields = missing
 
 
-def _parse_date(date_posted: str) -> Optional["_dt.datetime"]:
+def _parse_date(date_posted):
     import datetime as _dt
     from email.utils import parsedate_to_datetime
 
-    s = date_posted.strip()
+    if date_posted is None:
+        return None
+    s = str(date_posted).strip()
     if not s or s == MISSING:
         return None
+    # Epoch: pure-digit integers. 10 digits = seconds, 13 = milliseconds.
+    if s.isdigit() and len(s) in (10, 13):
+        try:
+            v = float(s) if len(s) == 10 else float(s) / 1000.0
+            return _dt.datetime.fromtimestamp(v, tz=_dt.timezone.utc)
+        except (OverflowError, OSError, ValueError):
+            pass
     # RFC-2822 / RSS pubDate, e.g. "Wed, 14 Nov 2023 10:00:00 GMT"
     try:
         r = parsedate_to_datetime(s)

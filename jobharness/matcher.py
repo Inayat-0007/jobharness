@@ -44,16 +44,26 @@ def matches_profile(job: Job, profile: Profile) -> bool:
             if nums and max(int(n) for n in nums) < int(profile.salary_floor):
                 return False
 
-    # Company allowlist (if set and this source is career-page style)
-    if profile.company_allowlist:
-        allowed = [
-            (c.lower() if isinstance(c, str) else c.get("company", "").lower())
-            for c in profile.company_allowlist
-        ]
-        allowed = [a for a in allowed if a]
-        # only enforce for company-specific career sources; for aggregators skip
-        if job.source_name in ("greenhouse", "lever", "career_page_generic") and allowed:
-            if job.company.lower() not in allowed and not any(a in job.company.lower() for a in allowed):
+    # Company allowlist enforcement (career-page-style sources only).
+    # Allowed tokens come from greenhouse_boards / lever_boards (slugs, which the
+    # adapters derive the company name from) and career_pages ({company,url}).
+    if profile.company_allowlist or profile.greenhouse_boards or profile.lever_boards or profile.career_pages:
+        if job.source_name in ("greenhouse", "lever", "career_page_generic"):
+            allowed = set()
+            for b in profile.greenhouse_boards:
+                allowed.add(str(b).lower())
+            for b in profile.lever_boards:
+                allowed.add(str(b).lower())
+            for c in profile.career_pages:
+                if isinstance(c, dict) and c.get("company"):
+                    allowed.add(str(c["company"]).lower())
+            for c in (getattr(profile, "company_allowlist", []) or []):  # legacy
+                if isinstance(c, str):
+                    allowed.add(c.lower())
+                elif isinstance(c, dict) and c.get("company"):
+                    allowed.add(str(c["company"]).lower())
+            allowed.discard("")
+            if allowed and job.company.lower() not in allowed and not any(a in job.company.lower() for a in allowed):
                 return False
 
     return True

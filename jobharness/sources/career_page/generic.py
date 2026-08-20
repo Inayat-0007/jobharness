@@ -18,18 +18,22 @@ class GenericCareerPageAdapter(SourceAdapter):
     name = "career_page_generic"
 
     def fetch(self, profile: Profile) -> list[RawJob]:
-        urls = []
-        for c in profile.company_allowlist or []:
+        seeds = []
+        for c in profile.career_pages or [
+            e for e in (getattr(profile, "company_allowlist", []) or []) if isinstance(e, dict) and e.get("url")
+        ]:
             if isinstance(c, dict):
                 u = c.get("url")
                 company = c.get("company", "")
-            else:
+            elif isinstance(c, str):
                 u = str(c)
                 company = ""
+            else:
+                continue
             if u:
-                urls.append((company, u))
+                seeds.append((company, u))
         out: list[RawJob] = []
-        for company, seed in urls:
+        for company, seed in seeds:
             random_delay()
             with make_client() as client:
                 try:
