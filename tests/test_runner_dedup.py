@@ -61,3 +61,84 @@ def test_pre_dedup_collapses_same_job_across_sources(tmp_path, monkeypatch):
     assert result["total_raw"] == 2
     assert calls["n"] == 1
     assert result["total_matched"] == 1
+
+
+def _write_profile2(tmp_path):
+    p = tmp_path / "p.yaml"
+    p.write_text(
+        "name: t\nroles: [Backend Engineer]\nkeywords: [python]\nexcludes: []\n"
+        "remote: true\nllm_provider: gemini\ntop_n: 5\nsources:\n  remoteok: true\n",
+        encoding="utf-8",
+    )
+    return p
+
+
+def make_job_for_runner(title, company, location, url, source="remoteok", **kw):
+    from jobharness.models import RawJob
+    raw = RawJob(
+        source_name=source,
+        source_url=url,
+        title=title,
+        company=company,
+        location=location,
+        description="python api backend engineer 5 years experience",
+        posted_date="2026-08-20",
+        apply_url=url,
+    )
+    for k, v in kw.items():
+        setattr(raw, k, v)
+    return raw
+
+
+def _run_one(tmp_path, raws, monkeypatch):
+    import jobharness.sources.api.remoteok as remoteok_mod
+
+    monkeypatch.setattr(remoteok_mod.RemoteOKAdapter, "fetch", lambda self, p: raws)
+    monkeypatch.setattr(
+        "jobharness.runner.enabled_adapters",
+        lambda profile: [remoteok_mod.RemoteOKAdapter()],
+    )
+    monkeypatch.setattr("jobharness.runner.telegram", mock.MagicMock(configured=lambda: False))
+
+    from jobharness.profile import load_profile
+    prof = load_profile(_write_profile2(tmp_path))
+    return runner.run_once(
+        prof, str(tmp_path), top_n=5, verify_reachable=False, use_llm=False, push_telegram=False
+    )
+
+
+def test_fuzzy_merge_high_path(tmp_path, monkeypatch):
+    """Same job with rewritten title -> HIGH match -> merged, not genuinely_new."""
+    url = "https://acme.com/j/1"
+    raws1 = [make_job_for_runner("Backend Engineer", "Acme", "Remote", url)]
+    raws2 = [make_job_for_runner("Backend Engineer (Remote)", "Acme", "Remote", url)]
+
+    r1 = _run_one(tmp_path, raws1, monkeypatch)
+    assert r1["total_matched"] == 1
+    assert r1["report"]["new_count"] == 1
+
+    r2 = _run_one(tmp_path, raws2, monkeypatch)
+    # Second run: merged, not genuinely new, not in new_count
+    assert r2["total_matched"] == 1
+    assert r2["report"]["new_count"] == 0
+
+
+def test_fuzzy_merge_medium_path(tmp_path, monkeypatch):
+    """Similar but different location -> MEDIUM -> REVIEW decision + possible_duplicate_of."""
+    import json as _json
+
+    url = "https://acme.com/j/1"
+    raws1 = [make_job_for_runner("Backend Engineer", "Acme", "Remote", url)]
+    raws2 = [make_job_for_runner("Backend Engineer", "Acme", "Austin, TX", url)]
+
+    r1 = _run_one(tmp_path, raws1, monkeypatch)
+    assert r1["total_matched"] == 1
+
+    r2 = _run_one(tmp_path, raws2, monkeypatch)
+    assert r2["total_matched"] == 1
+    # MEDIUM: stored as a new row flagged REVIEW with possible_duplicate_of set.
+    with open(r2["report"]["json"], encoding="utf-8") as fh:
+        job = _json.load(fh)[0]
+    assert job["decision"] == "REVIEW"
+    assert job["possible_duplicate_of"]
+    assert job["identity_score"] > 0.5
