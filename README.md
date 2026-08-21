@@ -58,10 +58,14 @@ python -m jobharness run --source remoteok --source weworkremotely
   JSON-LD/`schema.org JobPosting` scraper for any company career URL.
 - **Tier 3 — Google for Jobs:** best-effort scrape of JobPosting structured
   data. Detection-prone; degrades to empty rather than fabricating.
-- **Tier 5 — Login-gated (LinkedIn, Indeed, Glassdoor):** headed Playwright +
-  persistent cookies + stealth + optional proxy. **CAPTCHA is solved by YOU** —
-  the run pauses and prints a prompt; solve it in the browser, then press ENTER.
-  No automated captcha solving, by design. Enable in profile (off by default).
+- **Tier 5 — Login-gated (LinkedIn, Indeed, Glassdoor, Naukri, Internshala, Hirist, Wellfound):** headed Playwright +
+  persistent cookies + stealth + optional proxy. **CAPTCHA and login are done by YOU** —
+  when a portal needs it, the browser opens and the run **waits automatically**
+  (no console interaction): solve the CAPTCHA or log in, and the run continues
+  on its own. Naukri and Hirist additionally need a one-time manual login on
+  first run (cookies are persisted in `cookies/<source>.json`). No automated
+  captcha solving, by design. Enable in profile (default: off for linkedin/indeed/glassdoor,
+  on for naukri/internshala/hirist/wellfound).
 
 ## Anti-bot defenses
 
@@ -108,10 +112,10 @@ are centralized in `jobharness/scoring/thresholds.py` and `jobharness/algo.py`
 
 ### Push gate
 
-Telegram pushes only `decision == AUTO_ACCEPT` **and** `genuinely_new` **and**
-not CLOSED. Fuzzy-merged (HIGH identity) and REVIEW jobs never alert — this is
-deliberately conservative: fewer, higher-confidence alerts. Reports still list
-everything with a Decision column.
+Telegram pushes only genuinely-new jobs that are not hard REJECTs
+(AUTO_ACCEPT + REVIEW) and not CLOSED, plus the full report as a **PDF**
+attachment (report.html printed to A4; CSV fallback). Fuzzy-merged (HIGH
+identity) and REJECT jobs never alert — deliberately conservative.
 
 ### Source statuses
 
@@ -137,8 +141,9 @@ realistic UA/locale/timezone, `playwright-stealth` when available (manual
 `navigator.webdriver` patch fallback), persistent login cookies per source,
 optional rotating proxies, jittered delays, scroll-to-load for lazy cards,
 resilient multi-selector fallbacks. On a hard block the scraper automatically
-retries with a mobile context; on a CAPTCHA it pauses for you to solve it
-manually (no automated solving, by design).
+retries with a mobile context; on a CAPTCHA or login wall it waits for you to
+handle it in the browser and continues automatically (no automated solving, by
+design).
 
 ## Output
 
@@ -219,6 +224,10 @@ matching + decision engine, and the evaluation benchmark dataset + metrics
   with gated sources. By default these are off in the profile — enable
   `linkedin`/`indeed`/`glassdoor` only when you're at the keyboard to solve any
   CAPTCHA in the headed browser.
+- Naukri/Hirist require a one-time manual login in the opened browser (cookies
+  persist in `cookies/<source>.json`; no credentials are stored); expired
+  sessions re-prompt at the next run. Runs must happen on your machine — the
+  headed browser + human CAPTCHA/login gates cannot run on a server.
 - Google for Jobs and gated sources are detection-prone; a run may return fewer
   results on a given day. The harness retries (mobile fallback) and never
   fabricates results to fill the gap.
@@ -241,8 +250,8 @@ matching + decision engine, and the evaluation benchmark dataset + metrics
    push.
 5. **`profiles/my-target.yaml` / `.kilo/` untracked** — intentional; keep them
    out of commits.
-6. **Windows-only note** — `browser.py` chmod is a no-op on win32; the CAPTCHA
-   gate blocks the CLI thread on `input()` (expected for the headed workflow).
+6. **Windows-only note** — `browser.py` chmod is a no-op on win32; CAPTCHA/login
+   gates poll the open browser (auto-continue) instead of blocking on `input()`.
 7. **No lint/typecheck config** — no ruff/mypy in `pyproject.toml`; only
    pytest (plan: add only if requested).
 8. **All keys empty in `.env`** — LLM extraction + Telegram push are dormant
@@ -277,6 +286,10 @@ pip install jobharness[ml]
   with gated sources. By default these are off in the profile — enable
   `linkedin`/`indeed`/`glassdoor` only when you're at the keyboard to solve any
   CAPTCHA in the headed browser.
+- Naukri/Hirist require a one-time manual login in the opened browser (cookies
+  persist in `cookies/<source>.json`; no credentials are stored); expired
+  sessions re-prompt at the next run. Runs must happen on your machine — the
+  headed browser + human CAPTCHA/login gates cannot run on a server.
 - Google for Jobs and gated sources are detection-prone; a run may return fewer
   results on a given day. The harness retries (mobile fallback) and never
   fabricates results to fill the gap.

@@ -26,14 +26,20 @@ SOURCE_AUTHORITY = {
     "usajobs": 5,
     "adzuna": 5,
     "career_page_generic": 4,
+    "career_page_browser": 4,
     "google_jobs": 3,
     "remoteok": 2,
     "weworkremotely": 2,
     "remotive": 2,
     "jobicy": 2,
     "linkedin": 0,
+    "linkedin_guest": 2,
     "indeed": 0,
     "glassdoor": 0,
+    "naukri": 0,
+    "internshala": 0,
+    "hirist": 0,
+    "wellfound": 0,
 }
 
 

@@ -7,7 +7,7 @@ from ..models import RawJob
 from ..profile import Profile
 from ..browser import (
     open_browser,
-    manual_captcha_wait,
+    wait_for_captcha,
     detect_block,
     scroll_to_load,
     wait_for_selector_any,
@@ -51,7 +51,10 @@ class GlassdoorAdapter(SourceAdapter):
             block = detect_block(page)
             if block:
                 if block == "captcha":
-                    manual_captcha_wait(self.name, True)
+                    if not wait_for_captcha(page, self.name, timeout=600):
+                        if not mobile:
+                            raise RuntimeError(f"captcha wait timed out")
+                        return out
                     time.sleep(3)
                 else:
                     if not mobile:

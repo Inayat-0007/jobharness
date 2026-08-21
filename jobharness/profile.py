@@ -24,6 +24,7 @@ class Profile:
     sources: dict = field(default_factory=dict)        # {source_name: bool}
     llm_provider: str = "gemini"
     top_n: int = 50
+    adzuna_country: str = "us"
     use_ml: bool = False                                # Phase 4 GATE: off by default
 
 
@@ -37,10 +38,17 @@ def default_sources() -> dict:
         "usajobs": True,
         "greenhouse": True,
         "lever": True,
+        "career_page_generic": True,
+        "career_page_browser": True,
         "google_jobs": True,
         "linkedin": False,
+        "linkedin_guest": True,
         "indeed": False,
         "glassdoor": False,
+        "naukri": True,
+        "internshala": True,
+        "hirist": True,
+        "wellfound": True,
     }
 
 
@@ -108,6 +116,7 @@ def save_profile(profile: Profile, path: str | Path) -> None:
         "sources": profile.sources,
         "llm_provider": profile.llm_provider,
         "top_n": profile.top_n,
+        "adzuna_country": profile.adzuna_country,
     }
     p.write_text(yaml.safe_dump(data, sort_keys=False), encoding="utf-8")
 

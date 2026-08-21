@@ -13,6 +13,7 @@ PROVIDER_ENV = {
     "gemini": ("GEMINI_API_KEY", "GEMINI_BASE_URL", "GEMINI_MODEL"),
     "glm": ("GLM_API_KEY", "GLM_BASE_URL", "GLM_MODEL"),
     "qwen": ("QWEN_API_KEY", "QWEN_BASE_URL", "QWEN_MODEL"),
+    "deepseek": ("DEEPSEEK_API_KEY", "DEEPSEEK_BASE_URL", "DEEPSEEK_MODEL"),
 }
 
 # Fallback order if a provider fails. Lowest cost first per plan.

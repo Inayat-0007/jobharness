@@ -7,6 +7,28 @@ from ...profile import Profile
 from ...fetcher import make_client, blocked_response, random_delay
 
 
+COUNTRY_NAMES = {
+    "in": "India",
+    "us": "USA",
+    "gb": "UK",
+    "ca": "Canada",
+    "au": "Australia",
+    "nz": "New Zealand",
+    "mx": "Mexico",
+    "br": "Brazil",
+    "de": "Germany",
+    "fr": "France",
+    "sg": "Singapore",
+    "ae": "UAE",
+    "za": "South Africa",
+    "nl": "Netherlands",
+    "es": "Spain",
+    "it": "Italy",
+    "ie": "Ireland",
+    "pl": "Poland",
+}
+
+
 class AdzunaAdapter(SourceAdapter):
     name = "adzuna"
 
@@ -15,10 +37,10 @@ class AdzunaAdapter(SourceAdapter):
         app_key = secrets.get("ADZUNA_APP_KEY")
         if not app_id or not app_key:
             return []
-        what = " ".join(profile.roles[:1] + profile.keywords[:3]) or "developer"
+        what = (profile.roles or profile.keywords or ["developer"])[0]
         if profile.remote and "remote" not in what.lower():
-            what = what + " remote"
-        country = "us"
+            what = f"{what} remote"
+        country = profile.adzuna_country or "us"
         params = {
             "app_id": app_id,
             "app_key": app_key,
@@ -33,6 +55,7 @@ class AdzunaAdapter(SourceAdapter):
             resp = client.get(
                 f"https://api.adzuna.com/v1/api/jobs/{country}/search/1",
                 params=params,
+                headers={"Accept": "application/json"},
             )
             if blocked_response(resp):
                 return out
@@ -44,6 +67,9 @@ class AdzunaAdapter(SourceAdapter):
             title = r.get("title", "")
             company = (r.get("company") or {}).get("displayname", "")
             loc = (r.get("location") or {}).get("displayname", "")
+            cname = COUNTRY_NAMES.get(country, country.upper())
+            if cname.lower() not in loc.lower():
+                loc = f"{loc}, {cname}" if loc else cname
             desc = r.get("description", "")
             apply_url = r.get("redirect_url") or r.get("url") or ""
             created = r.get("created", "")

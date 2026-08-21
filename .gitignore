@@ -5,6 +5,7 @@ cookies/
 *.db
 *.sqlite
 reports/
+.kilo/
 .venv/
 __pycache__/
 *.pyc

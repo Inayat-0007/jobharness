@@ -1,6 +1,7 @@
 from __future__ import annotations
 
 import datetime as dt
+import threading
 import traceback
 from collections import Counter
 from concurrent.futures import ThreadPoolExecutor, as_completed
@@ -13,7 +14,7 @@ from .extractor import extract
 from .matcher import matches_profile
 from .verify import verify
 from .dedupe import DedupeStore
-from .report import write_reports
+from .report import write_reports, write_pdf
 from .urlutil import canonicalize_url
 from .notify import telegram
 from .evidence.source import SourceStatus, source_authority
@@ -112,23 +113,45 @@ def run_once(
 
     llm_remaining = llm_budget if use_llm else 0
     matched: list[Job] = []
-    for raw in unique_raws:
-        use_this_llm = llm_remaining > 0
-        if use_this_llm:
-            llm_remaining -= 1
+    _budget_lock = threading.Lock()
+
+    # Prioritize jobs whose title/company already hints at a profile match so
+    # the capped LLM budget is spent on likely matches first.
+    def _likely(raw: RawJob) -> bool:
+        t = f"{raw.title or ''} {raw.company or ''}".lower()
+        return any(term.lower() in t for term in profile.roles) or any(
+            kw.lower() in t for kw in profile.keywords
+        )
+
+    unique_raws.sort(key=_likely, reverse=True)
+
+    def _extract_one(raw) -> Job | None:
+        nonlocal llm_remaining
+        with _budget_lock:
+            use_this_llm = llm_remaining > 0
+            if use_this_llm:
+                llm_remaining -= 1
         try:
             job = extract(raw, use_llm=use_this_llm, llm_provider=profile.llm_provider)
         except Exception as e:
             errors.append(f"extract[{raw.source_name}]: {e}")
-            continue
+            return None
         if not job.title or job.title == MISSING:
-            continue
+            return None
         try:
             if not matches_profile(job, profile):
-                continue
+                return None
         except Exception:
             pass
-        matched.append(job)
+        return job
+
+    # Extraction is network-bound (LLM calls); parallelize within the budget.
+    with ThreadPoolExecutor(max_workers=4) as ex:
+        futures = {ex.submit(_extract_one, raw): raw for raw in unique_raws}
+        for fut in as_completed(futures):
+            job = fut.result()
+            if job is not None:
+                matched.append(job)
     if use_llm and llm_remaining == 0:
         print(f"[jobharness] LLM budget ({llm_budget}) reached; remaining extractions used raw fields")
     print(f"[jobharness] matched after filter: {len(matched)}")
@@ -221,13 +244,17 @@ def run_once(
     # Report
     rep = write_reports(matched, reports_dir, run_ts=run_ts)
 
+    # Structured PDF of the report (best-effort; falls back to CSV silently).
+    if rep["total"]:
+        rep["pdf"] = write_pdf(rep["html"], f"{rep['dir']}/report.pdf")
+
     # Telegram push (genuinely new + authentic + sufficient confidence only)
     pushed = 0
     if push_telegram and telegram.configured():
         try:
             pushed = telegram.notify_new(matched)
-            csv_path = rep["csv"]
-            telegram.send_file(csv_path, caption=f"Job harness run {run_ts}: {rep['new_count']} new")
+            attachment = rep.get("pdf") or rep["csv"]
+            telegram.send_file(attachment, caption=f"Job harness run {run_ts}: {rep['new_count']} new")
         except Exception as e:
             errors.append(f"telegram: {e}")
     elif push_telegram and not telegram.configured():

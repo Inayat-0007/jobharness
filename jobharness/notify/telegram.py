@@ -80,13 +80,13 @@ def send_file(path: str, caption: str = "") -> bool:
 
 
 def notify_new(jobs: list[Job]) -> int:
-    """Push only AUTO_ACCEPT decisions: genuinely new + not CLOSED + decided
-    AUTO_ACCEPT. Fuzzy-merged (HIGH) and REVIEW jobs never alert."""
+    """Push genuinely-new, not-CLOSED jobs that are not hard REJECTs
+    (AUTO_ACCEPT + REVIEW). Fuzzy-merged (HIGH) and REJECT jobs never alert."""
     sent = 0
     for j in jobs:
         if not j.genuinely_new or j.authentic_status == "CLOSED":
             continue
-        if getattr(j, "decision", "") != "AUTO_ACCEPT":
+        if getattr(j, "decision", "") in ("", "REJECT"):
             continue
         if send_card(j):
             sent += 1

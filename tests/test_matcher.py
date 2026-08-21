@@ -54,3 +54,22 @@ def test_salary_floor_rejects_below():
     assert matches_profile(j, p) is False
     j.salary_if_present = "120000-150000"
     assert matches_profile(j, p) is True
+
+
+def test_location_india_rejects_remote_and_foreign():
+    p = base_profile(location="India", remote=False)
+    assert matches_profile(make_job(title="Backend Engineer", location="Remote", desc="python"), p) is False
+    assert matches_profile(make_job(title="Backend Engineer", location="United States", desc="python"), p) is False
+    assert matches_profile(make_job(title="Backend Engineer", location="Bengaluru, Karnataka, India", desc="python"), p) is True
+    assert matches_profile(make_job(title="Backend Engineer", location="Bangalore, Karnataka", desc="python"), p) is True
+    assert matches_profile(make_job(title="Backend Engineer", location="Hyderabad, Telangana", desc="python"), p) is True
+
+
+def test_location_india_allows_unknown():
+    p = base_profile(location="India")
+    assert matches_profile(make_job(title="Backend Engineer", location="", desc="python"), p) is True
+
+
+def test_location_remote_allowed_when_profile_remote():
+    p = base_profile(location="India", remote=True)
+    assert matches_profile(make_job(title="Backend Engineer", location="Remote", desc="python"), p) is True

@@ -1,0 +1,60 @@
+# ====== MY TARGETS — edit ONLY this file, never the code ======
+# This is YOUR data. The program reads it and finds only jobs matching it.
+
+name: my-target
+
+# 1) TITLES you want (keep 2-4). Job matches if ANY appears.
+roles:
+  - Python Developer
+  - Backend Engineer
+
+# 2) TECH you know. Job matches if ANY keyword appears in title/description.
+keywords:
+  - python
+  - django
+  - fastapi
+
+# 3) REJECT list. If ANY of these appears, job is skipped.
+excludes:
+  - manager
+  - senior
+  - frontend
+  - java
+
+# 4) Location: "" = anywhere. Or "Remote", "London", "New York"
+location: ""
+
+# 5) Remote only? true = prefer remote
+remote: true
+
+# 6) Level: junior / mid / senior  (or "" = any)
+seniority: ""
+
+# 7) Minimum salary in $ (or null = any)
+salary_floor: null
+
+# 8) Specific companies (optional). Find their board slug:
+#    Greenhouse: greenhouse.io/<slug>   Lever: jobs.lever.co/<slug>
+greenhouse_boards:
+  - airbnb
+  - stripe
+lever_boards:
+  - lever
+  - stripe
+career_pages: []
+
+# 9) Which websites to search (true = on, false = off)
+sources:
+  remoteok: true
+  weworkremotely: true
+  remotive: true
+  greenhouse: true
+  lever: true
+  adzuna: true
+  usajobs: false
+  linkedin: false
+  indeed: false
+  glassdoor: false
+
+llm_provider: deepseek
+top_n: 50

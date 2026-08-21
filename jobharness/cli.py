@@ -7,7 +7,7 @@ from pathlib import Path
 from . import secrets
 from .dashboard import build_dashboard
 from .profile import load_profile, make_demo_profile
-from .runner import run_once
+from .runner import run_once, DEFAULT_LLM_BUDGET
 
 
 PROJECT_ROOT = Path(__file__).resolve().parent.parent
@@ -21,6 +21,7 @@ def build_parser() -> argparse.ArgumentParser:
     r.add_argument("--profile", default=str(PROJECT_ROOT / "profiles" / "demo.yaml"))
     r.add_argument("--source", action="append", dest="sources", help="Only run these source names (repeatable).")
     r.add_argument("--top", type=int, default=None)
+    r.add_argument("--llm-budget", type=int, default=None, help="Cap LLM extraction calls per run (default 200).")
     r.add_argument("--no-llm", action="store_true", help="Skip LLM extraction (use raw fields only).")
     r.add_argument("--no-verify", action="store_true", help="Skip apply-URL reachability check.")
     r.add_argument("--no-push", action="store_true", help="Skip Telegram push.")
@@ -56,6 +57,7 @@ def main(argv: list[str] | None = None) -> int:
             verify_reachable=verify_reachable,
             use_llm=use_llm,
             push_telegram=push,
+            llm_budget=args.llm_budget or DEFAULT_LLM_BUDGET,
         )
         _print_summary(result)
         return 0

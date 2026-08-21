@@ -14,10 +14,16 @@ from .sources.rss.jobicy import JobicyAdapter
 from .sources.career_page.greenhouse import GreenhouseAdapter
 from .sources.career_page.lever import LeverAdapter
 from .sources.career_page.generic import GenericCareerPageAdapter
+from .sources.career_page.browser_generic import CareerPageBrowserAdapter
 from .sources.google_jobs import GoogleJobsAdapter
 from .sources.linkedin import LinkedInAdapter
+from .sources.linkedin_guest import LinkedInGuestAdapter
 from .sources.indeed import IndeedAdapter
 from .sources.glassdoor import GlassdoorAdapter
+from .sources.naukri import NaukriAdapter
+from .sources.internshala import InternshalaAdapter
+from .sources.hirist import HiristAdapter
+from .sources.wellfound import WellfoundAdapter
 
 
 def all_adapters() -> dict[str, SourceAdapter]:
@@ -31,10 +37,16 @@ def all_adapters() -> dict[str, SourceAdapter]:
         GreenhouseAdapter(),
         LeverAdapter(),
         GenericCareerPageAdapter(),
+        CareerPageBrowserAdapter(),
         GoogleJobsAdapter(),
         LinkedInAdapter(),
+        LinkedInGuestAdapter(),
         IndeedAdapter(),
         GlassdoorAdapter(),
+        NaukriAdapter(),
+        InternshalaAdapter(),
+        HiristAdapter(),
+        WellfoundAdapter(),
     ]}
 
 

@@ -1,8 +1,10 @@
 from __future__ import annotations
 
+import random
 import time
 
 from .base import SourceAdapter
+from .exceptions import RateLimitedError
 from ..models import RawJob
 from ..profile import Profile
 from ..browser import (
@@ -14,14 +16,26 @@ from ..browser import (
 )
 
 
-class IndeedAdapter(SourceAdapter):
-    name = "indeed"
+class WellfoundAdapter(SourceAdapter):
+    """Wellfound (AngelList) jobs scraper (Tier 5, no login for search).
+
+    Headed Playwright + stealth + persistent cookies + manual CAPTCHA gate.
+    Global site — the profile's India/remote location filter in matcher.py
+    rejects on-site postings outside India.
+    """
+
+    name = "wellfound"
 
     def fetch(self, profile: Profile) -> list[RawJob]:
         last_err = None
         for mobile in (False, True):
             try:
                 return self._fetch(profile, mobile=mobile)
+            except RateLimitedError as e:
+                last_err = e
+                if not mobile:
+                    continue
+                raise
             except Exception as e:
                 last_err = e
                 continue
@@ -33,23 +47,17 @@ class IndeedAdapter(SourceAdapter):
         import urllib.parse as up
 
         what = " ".join(profile.roles[:1] + ["fresher"]) or "Software Engineer"
-        where = profile.location or ("Remote" if profile.remote else "")
+        where = profile.location or "India"
         url = (
-            "https://in.indeed.com/jobs?q="
+            "https://wellfound.com/jobs?location="
+            + up.quote(where)
+            + "&q="
             + up.quote(what)
-            + "&fromage=7&sort=date"
-            + ("&sc=0kf%3Aattr(DSQF7)%3B" if profile.remote else "")
-            + ("&l=" + up.quote(where) if where else "")
         )
         out: list[RawJob] = []
-        with open_browser(
-            self.name,
-            headless=False,
-            mobile=mobile,
-            timezone_id="Asia/Kolkata",
-            locale="en-IN",
-        ) as (_p, browser):
+        with open_browser(self.name, headless=False, mobile=mobile) as (_p, browser):
             page = browser.pages[0] if browser.pages else browser.new_page()
+            time.sleep(random.uniform(1.5, 3.0))
             try:
                 page.goto(url, timeout=60000, wait_until="domcontentloaded")
             except Exception:
@@ -60,53 +68,47 @@ class IndeedAdapter(SourceAdapter):
                 if block == "captcha":
                     if not wait_for_captcha(page, self.name, timeout=600):
                         if not mobile:
-                            raise RuntimeError(f"captcha wait timed out")
+                            raise RateLimitedError(f"{self.name}: captcha wait timed out")
                         return out
                     time.sleep(3)
                 else:
                     if not mobile:
-                        raise RuntimeError(f"blocked: {block}")
+                        raise RateLimitedError(f"{self.name}: blocked: {block}")
                     return out
             if not wait_for_selector_any(
                 page,
                 [
-                    "div.job_seen_beacon",
-                    ".result",
-                    "[data-jk]",
-                    "[data-testid='job-card']",
-                    "div.css-1m4cu4y",
+                    "div[data-testid^='job-card']",
+                    ".jobs-list-item",
+                    ".job-card",
                 ],
                 timeout=20000,
             ):
-                if not page.query_selector("div.job_seen_beacon, [data-jk], a[href*='/jobs/']"):
+                if not page.query_selector("div[data-testid^='job-card'], .jobs-list-item"):
                     return out
-            scroll_to_load(page, max_scrolls=8, pause=0.7)
+            scroll_to_load(page, max_scrolls=8, pause=0.8)
             cards = page.query_selector_all(
-                "div.job_seen_beacon, .result, [data-jk], [data-testid='job-card']"
+                "div[data-testid^='job-card'], .jobs-list-item"
             )
             seen = 0
             for c in cards:
                 if seen >= profile.top_n:
                     break
                 try:
-                    title = c.query_selector(
-                        "h2.jobTitle, .jobTitle span, a[href*='/jobs/'], [data-testid='job-title'] span, span"
+                    title_el = c.query_selector(
+                        "a[data-testid*='title'], h2, .job-title"
                     )
-                    title_txt = (title.inner_text() if title else "").strip()
+                    title_txt = (title_el.inner_text() if title_el else "").strip()
                     company = c.query_selector(
-                        ".companyName, [data-testid='company-name'], .css-1h4635t"
+                        "[data-testid*='company'], .company-name, .company"
                     )
                     company_txt = (company.inner_text() if company else "").strip()
-                    loc = c.query_selector(
-                        ".companyLocation, [data-testid='text-location'], .css-1p0sjll"
-                    )
+                    loc = c.query_selector("[data-testid*='location'], .location")
                     loc_txt = (loc.inner_text() if loc else "").strip()
                     a = c.query_selector("a[href*='/jobs/']")
                     href = a.get_attribute("href") if a else ""
                     if href and not href.startswith("http"):
-                        href = "https://in.indeed.com" + href
-                    age = c.query_selector(".date, [data-testid='myTime-state'], .css-1hv8ot2")
-                    age_txt = (age.inner_text() if age else "").strip()
+                        href = "https://wellfound.com" + href
                     if not title_txt or not href:
                         continue
                     out.append(
@@ -116,7 +118,7 @@ class IndeedAdapter(SourceAdapter):
                             title=title_txt,
                             company=company_txt,
                             location=loc_txt or where,
-                            posted_date=age_txt,
+                            description="",
                             apply_url=href,
                         )
                     )
