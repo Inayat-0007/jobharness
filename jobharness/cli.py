@@ -57,7 +57,7 @@ def main(argv: list[str] | None = None) -> int:
             verify_reachable=verify_reachable,
             use_llm=use_llm,
             push_telegram=push,
-            llm_budget=args.llm_budget or DEFAULT_LLM_BUDGET,
+            llm_budget=args.llm_budget if args.llm_budget is not None else DEFAULT_LLM_BUDGET,
         )
         _print_summary(result)
         return 0

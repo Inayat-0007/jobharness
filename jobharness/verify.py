@@ -9,7 +9,7 @@ import httpx
 
 from . import algo
 from .models import Job, CLOSED, MISSING, VALID_AUTHENTIC, _parse_date, freshness_label
-from .fetcher import make_client, blocked_response
+from .fetcher import make_client, blocked_response, resp_text
 from .urlutil import apply_url_domain as _domain
 from .scoring.authenticity import authenticity_score as _authenticity_score
 from .scoring.thresholds import (
@@ -97,7 +97,7 @@ def verify(job: Job, check_reachable: bool = True) -> Job:
         job.missing_fields.append("verified_reachable")
         job.confidence_score = min(job.confidence_score, SCORE_BLOCKED_CAP)
         return job
-    snippet = (resp.text or "")[:8000].lower()
+    snippet = resp_text(resp)[:8000].lower()
     marker = next((m for m in CLOSED_MARKERS if m in snippet), "")
     if marker:
         ctx["closed_marker"] = marker

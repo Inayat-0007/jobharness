@@ -3,7 +3,7 @@ from __future__ import annotations
 from ..base import SourceAdapter
 from ...models import RawJob
 from ...profile import Profile
-from ...fetcher import make_client, random_delay
+from ...fetcher import make_client, random_delay, resp_text
 from ..jobposting_ld import extract_jobpostings_from_html
 
 
@@ -42,5 +42,5 @@ class GenericCareerPageAdapter(SourceAdapter):
                     continue
                 if resp.status_code != 200:
                     continue
-            out.extend(extract_jobpostings_from_html(resp.text, self.name, seed, company))
+            out.extend(extract_jobpostings_from_html(resp_text(resp), self.name, seed, company))
         return out

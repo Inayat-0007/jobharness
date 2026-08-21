@@ -25,7 +25,8 @@ def _job_xss():
 
 def test_report_html_escapes_dangerous_title(tmp_path):
     res = write_reports([_job_xss()], tmp_path)
-    body = open(res["html"], encoding="utf-8").read()
+    with open(res["html"], encoding="utf-8") as fh:
+        body = fh.read()
     # raw markup must NOT be present (no XSS); HTML-escaped form must be present.
     assert _RAW not in body
     assert _ESCAPED in body
@@ -33,5 +34,6 @@ def test_report_html_escapes_dangerous_title(tmp_path):
 
 def test_report_still_has_apply_link(tmp_path):
     res = write_reports([_job_xss()], tmp_path)
-    body = open(res["html"], encoding="utf-8").read()
+    with open(res["html"], encoding="utf-8") as fh:
+        body = fh.read()
     assert 'href="https://acme.com/j/1"' in body

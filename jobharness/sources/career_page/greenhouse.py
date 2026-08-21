@@ -1,6 +1,7 @@
 from __future__ import annotations
 
 from ..base import SourceAdapter
+from ..exceptions import ParseFailureError
 from ...models import RawJob
 from ...profile import Profile
 from ...fetcher import make_client, random_delay
@@ -33,9 +34,20 @@ class GreenhouseAdapter(SourceAdapter):
                     data = resp.json()
                 except Exception:
                     continue
+                if not isinstance(data, dict):
+                    raise ParseFailureError(
+                        f"{self.name}: board {board} returned non-object payload: {type(data).__name__}"
+                    )
             company = board.replace("-", " ").title()
-            dep_lookup = {d["id"]: d["name"] for d in data.get("departments", [])}
+            deps = data.get("departments") or []
+            dep_lookup = (
+                {d["id"]: d["name"] for d in deps if isinstance(d, dict)}
+                if isinstance(deps, list)
+                else {}
+            )
             for job in data.get("jobs", []):
+                if not isinstance(job, dict):
+                    continue
                 title = job.get("title", "")
                 abs_url = job.get("absolute_url", "")
                 loc = job.get("location", {}).get("name", "") if isinstance(job.get("location"), dict) else ""

@@ -28,7 +28,7 @@ def _identity_passes(identity_score: float) -> bool:
     return identity_score >= AUTO_ACCEPT_IDENTITY or identity_score == 0.0
 
 
-def decide(identity_score: float, authenticity_score: float, match_score: float, job_state: str):
+def decide(identity_score: float, authenticity_score: float, match_score: float, job_state: str) -> tuple[str, list[str]]:
     """(decision, reasons) from the three scores + job state.
 
     - CLOSED / hard exclusion / invalid URL -> REJECT

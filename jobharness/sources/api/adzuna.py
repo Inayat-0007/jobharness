@@ -2,6 +2,7 @@ from __future__ import annotations
 
 from ... import secrets
 from ..base import SourceAdapter
+from ..exceptions import ParseFailureError
 from ...models import RawJob
 from ...profile import Profile
 from ...fetcher import make_client, blocked_response, random_delay
@@ -63,7 +64,11 @@ class AdzunaAdapter(SourceAdapter):
                 data = resp.json()
             except Exception:
                 return out
+        if not isinstance(data, dict):
+            raise ParseFailureError(f"{self.name}: API returned non-object payload: {type(data).__name__}")
         for r in data.get("results", []):
+            if not isinstance(r, dict):
+                continue
             title = r.get("title", "")
             company = (r.get("company") or {}).get("displayname", "")
             loc = (r.get("location") or {}).get("displayname", "")

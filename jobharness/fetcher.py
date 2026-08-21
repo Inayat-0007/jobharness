@@ -43,11 +43,23 @@ def make_client(timeout: float = 30.0) -> httpx.Client:
     return httpx.Client(**client_kwargs)
 
 
+def resp_text(resp: httpx.Response) -> str:
+    """Decode a response body without raising UnicodeDecodeError.
+
+    Some portals serve mislabeled encodings; use the bytes with replacement
+    characters so parsing degrades gracefully instead of crashing.
+    """
+    try:
+        return resp.text or ""
+    except UnicodeDecodeError:
+        return (resp.content or b"").decode("utf-8", errors="replace")
+
+
 def blocked_response(resp: httpx.Response) -> bool:
     status = resp.status_code
     if status in (403, 429):
         return True
-    body_snippet = (resp.text or "")[:2000].lower()
+    body_snippet = resp_text(resp)[:2000].lower()
     markers = ("captcha", "are you a robot", "access denied", "unusual traffic", "verify you are human")
     return any(m in body_snippet for m in markers)
 
@@ -60,7 +72,7 @@ def classify_response(resp: httpx.Response):
     """
     from .evidence.source import SourceStatus
 
-    if resp.status_code == 429 or "rate limit" in (resp.text or "").lower():
+    if resp.status_code == 429 or "rate limit" in resp_text(resp).lower():
         return SourceStatus.RATE_LIMITED
     if resp.status_code == 401:
         return SourceStatus.AUTH_REQUIRED

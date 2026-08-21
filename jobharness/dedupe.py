@@ -83,6 +83,15 @@ INDEX_STATEMENTS = [
     "CREATE INDEX IF NOT EXISTS idx_jobs_possible_duplicate_of ON jobs(possible_duplicate_of)",
 ]
 
+# Columns find_candidates() may filter on. Lookups are whitelisted here so no
+# caller-controlled string ever reaches SQL interpolation.
+_CANDIDATE_COLUMNS = {
+    "job_id_hash": "job_id_hash",
+    "canonical_job_id": "canonical_job_id",
+    "canonical_url": "canonical_url",
+    "posting_id": "posting_id",
+}
+
 
 def _store_val(v):
     """Serialize a Job attribute for a TEXT column (lists -> ','-joined)."""
@@ -103,6 +112,10 @@ class DedupeStore:
         Path(self.path).parent.mkdir(parents=True, exist_ok=True)
         self.conn = sqlite3.connect(self.path)
         self.conn.row_factory = sqlite3.Row
+        # Overlapping runs must not crash with 'database is locked': wait up to
+        # 5s for a lock, and WAL lets readers/writers coexist.
+        self.conn.execute("PRAGMA busy_timeout=5000")
+        self.conn.execute("PRAGMA journal_mode=WAL")
         self._migrate()
         self._prune(max_age_days)
 
@@ -263,8 +276,9 @@ class DedupeStore:
         seen: set[str] = set()
 
         def _collect(col: str, value) -> None:
-            if not value:
+            if not value or col not in _CANDIDATE_COLUMNS:
                 return
+            col = _CANDIDATE_COLUMNS[col]
             for row in cur.execute(f"SELECT * FROM jobs WHERE {col}=?", (value,)).fetchall():
                 if row["job_id_hash"] not in seen:
                     seen.add(row["job_id_hash"])

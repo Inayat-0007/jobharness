@@ -39,6 +39,11 @@ from .scoring.thresholds import STATE_OPEN, STATE_CLOSED, STATE_INVALID_URL
 # Safety cap: never make more than this many LLM extraction calls per run.
 DEFAULT_LLM_BUDGET = 200
 
+# Thread-pool worker counts for each pipeline stage.
+FETCH_WORKERS = 4
+EXTRACT_WORKERS = 4
+VERIFY_WORKERS = 6
+
 # Sort rank: AUTO_ACCEPT > REVIEW > REJECT/"" (plan 1.5.4).
 DECISION_RANK = {"AUTO_ACCEPT": 3, "REVIEW": 2, "REJECT": 0, "": 0}
 
@@ -55,7 +60,7 @@ def run_once(
     llm_budget: int = DEFAULT_LLM_BUDGET,
 ) -> dict:
     secrets.load_env(project_root)
-    if top_n:
+    if top_n is not None:
         profile.top_n = top_n
     run_ts = dt.datetime.now().strftime("%Y%m%d-%H%M%S")
     db_path = f"{project_root}/jobs.db"
@@ -69,6 +74,7 @@ def run_once(
     raw_jobs: list[RawJob] = []
     blocked: list[str] = []
     errors: list[str] = []
+    errors_lock = threading.Lock()
     source_statuses: dict[str, SourceStatus] = {}
 
     def _fetch(adapter):
@@ -86,7 +92,7 @@ def run_once(
         except Exception as e:
             return adapter.name, [], f"{e}\n{traceback.format_exc()}", SourceStatus.SOURCE_DOWN
 
-    with ThreadPoolExecutor(max_workers=4) as ex:
+    with ThreadPoolExecutor(max_workers=FETCH_WORKERS) as ex:
         futures = {ex.submit(_fetch, a): a for a in adapters}
         for fut in as_completed(futures):
             name, jobs, err, status = fut.result()
@@ -134,7 +140,8 @@ def run_once(
         try:
             job = extract(raw, use_llm=use_this_llm, llm_provider=profile.llm_provider)
         except Exception as e:
-            errors.append(f"extract[{raw.source_name}]: {e}")
+            with errors_lock:
+                errors.append(f"extract[{raw.source_name}]: {e}")
             return None
         if not job.title or job.title == MISSING:
             return None
@@ -142,12 +149,13 @@ def run_once(
             if not matches_profile(job, profile):
                 return None
         except Exception as e:
-            errors.append(f"matcher[{job.source_name}]: {e}")
+            with errors_lock:
+                errors.append(f"matcher[{job.source_name}]: {e}")
             return None
         return job
 
     # Extraction is network-bound (LLM calls); parallelize within the budget.
-    with ThreadPoolExecutor(max_workers=4) as ex:
+    with ThreadPoolExecutor(max_workers=EXTRACT_WORKERS) as ex:
         futures = {ex.submit(_extract_one, raw): raw for raw in unique_raws}
         for fut in as_completed(futures):
             job = fut.result()
@@ -159,7 +167,7 @@ def run_once(
 
     # Verify concurrently (network-bound). Verify also sets confidence_score.
     if verify_reachable and matched:
-        with ThreadPoolExecutor(max_workers=6) as ex:
+        with ThreadPoolExecutor(max_workers=VERIFY_WORKERS) as ex:
             futs = {ex.submit(verify, job, True): job for job in matched}
             for fut in as_completed(futs):
                 job = futs[fut]

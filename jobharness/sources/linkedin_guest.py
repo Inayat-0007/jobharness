@@ -9,7 +9,7 @@ from urllib.parse import urlparse, urlunparse
 from .base import SourceAdapter
 from ..models import RawJob
 from ..profile import Profile
-from ..fetcher import make_client, random_delay
+from ..fetcher import make_client, random_delay, resp_text
 
 _LI_UA = (
     "Mozilla/5.0 (Windows NT 10.0; Win64; x64) AppleWebKit/537.36 "
@@ -63,7 +63,7 @@ class LinkedInGuestAdapter(SourceAdapter):
                 continue
             if resp.status_code != 200:
                 continue
-            jobs = self._parse(resp.text, where)
+            jobs = self._parse(resp_text(resp), where)
             if not jobs:
                 break
             out.extend(jobs)
@@ -133,7 +133,7 @@ class LinkedInGuestAdapter(SourceAdapter):
                 return
             if resp.status_code != 200:
                 return
-            job.description = self._extract_desc(resp.text)
+            job.description = self._extract_desc(resp_text(resp))
 
         with ThreadPoolExecutor(max_workers=6) as ex:
             futs = [ex.submit(_one, j) for j in to_enrich]

@@ -89,3 +89,31 @@ def test_title_helpers_delegate_to_algo():
     assert normalize_title("Senior Backend Engineer!") == "senior backend engineer"
     assert title_stem("Senior Backend Engineer") == "backend engineer"
     assert title_stem("Backend Engineer") == "backend engineer"
+
+
+def test_canonical_id_levels_precedence():
+    """LEVEL 1..3 outrank LEVEL 4; LEVEL 5 is the never-empty fallback.
+    LEVEL 4 (company+title+location) only fires when normalize_company yields
+    '' for a non-empty company (e.g. non-ASCII names)."""
+    j = Job(company="日本語合同会社", title="エンジニア", location="東京")
+    j.apply_url_direct = "https://example.com/j/1"
+    # LEVEL 3 skipped (normalize_company("日本語合同会社") == "") -> LEVEL 4
+    j.compute_hash()
+    assert j.compute_canonical_id().startswith("ct:")
+
+    j2 = Job(company="Acme", title="Engineer", location="Remote")
+    j2.apply_url_direct = "https://acme.com/j/1"
+    j2.canonical_url = "https://acme.com/j/1"
+    # LEVEL 2 canonical URL outranks LEVEL 3/4
+    assert j2.compute_canonical_id() == "url:https://acme.com/j/1"
+
+    j3 = Job(company="Acme", title="Engineer", location="Remote")
+    j3.apply_url_direct = "https://acme.com/j/1"
+    # LEVEL 3 (company entity + title, location-agnostic)
+    assert j3.compute_canonical_id() == "ct:acme|engineer"
+
+    j4 = Job(company="", title="", location="")
+    j4.apply_url_direct = "https://acme.com/j/1"
+    j4.compute_hash()
+    # LEVEL 5 fallback never empty
+    assert j4.compute_canonical_id().startswith("hash:")

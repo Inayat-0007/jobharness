@@ -25,12 +25,12 @@ def send_card(job: Job) -> bool:
     chat = _chat_id()
     if not token or not chat:
         return False
-    role = job.role or job.title
-    loc = job.location or ""
+    role = (job.role or job.title or "") or ""
+    loc = (job.location or "") or ""
     text = (
         f"<b>{_html.escape(role)}</b>\n"
-        f"@ {_html.escape(job.company)} | {_html.escape(loc)}{' (Remote)' if job.remote else ''}\n"
-        f"Posted: {_html.escape(job.date_posted)} ({_html.escape(job.freshness or '')})\n"
+        f"@ {_html.escape(job.company or '')} | {_html.escape(loc)}{' (Remote)' if job.remote else ''}\n"
+        f"Posted: {_html.escape(job.date_posted or '')} ({_html.escape(job.freshness or '')})\n"
         f"Exp: {_html.escape(job.experience_needed or '-')} | Salary: {_html.escape(job.salary_if_present or '-')}\n"
         f"Source: {_html.escape(job.source_name or '')} | Score: {job.confidence_score}\n"
     )
@@ -39,7 +39,7 @@ def send_card(job: Job) -> bool:
     reasons = getattr(job, "reason", []) or []
     if reasons:
         text += f"Reason: {_html.escape(str(reasons[0]))}\n"
-    text += f'<a href="{_html.escape(job.apply_url_direct, quote=True)}">Apply directly</a>'
+    text += f'<a href="{_html.escape(job.apply_url_direct or "", quote=True)}">Apply directly</a>'
     url = f"https://api.telegram.org/bot{token}/sendMessage"
     try:
         with httpx.Client(timeout=30.0) as client:

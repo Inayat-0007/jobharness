@@ -86,17 +86,26 @@ def extract_json(text: str) -> dict:
     fenced = re.search(r"```(?:json)?\s*(\{.*?\}|\[.*?\])\s*```", text, re.DOTALL)
     candidate = fenced.group(1) if fenced else text
     start = candidate.find("{")
-    if start == -1:
+    if start != -1:
+        depth = 0
+        for i in range(start, len(candidate)):
+            if candidate[i] == "{":
+                depth += 1
+            elif candidate[i] == "}":
+                depth -= 1
+                if depth == 0:
+                    try:
+                        return json.loads(candidate[start : i + 1])
+                    except json.JSONDecodeError:
+                        return {}
+    # No balanced object found: try the whole candidate, which may be a
+    # top-level JSON array (e.g. the model returned a list of field dicts).
+    try:
+        parsed = json.loads(candidate.strip())
+    except json.JSONDecodeError:
         return {}
-    depth = 0
-    for i in range(start, len(candidate)):
-        if candidate[i] == "{":
-            depth += 1
-        elif candidate[i] == "}":
-            depth -= 1
-            if depth == 0:
-                try:
-                    return json.loads(candidate[start : i + 1])
-                except json.JSONDecodeError:
-                    return {}
+    if isinstance(parsed, dict):
+        return parsed
+    if isinstance(parsed, list) and parsed and isinstance(parsed[0], dict):
+        return parsed[0]
     return {}

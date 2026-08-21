@@ -5,7 +5,7 @@ import time
 from .base import SourceAdapter
 from ..models import RawJob
 from ..profile import Profile
-from ..fetcher import make_client, blocked_response, random_delay
+from ..fetcher import make_client, blocked_response, random_delay, resp_text
 from .jobposting_ld import extract_jobpostings_from_html, extract_jobpostings_from_blob
 
 
@@ -47,7 +47,7 @@ class GoogleJobsAdapter(SourceAdapter):
                 return []
             if resp.status_code != 200 or blocked_response(resp):
                 return []
-            html = resp.text or ""
+            html = resp_text(resp)
         # Path 1: proper schema.org JobPosting JSON-LD blocks.
         out = extract_jobpostings_from_html(html, self.name, url)
         if out:
