@@ -1,8 +1,8 @@
 from __future__ import annotations
 
+from jobharness.matcher import matches_profile
 from jobharness.models import Job
 from jobharness.profile import Profile
-from jobharness.matcher import matches_profile
 from jobharness.scoring.matching import score_match, skill_normalize
 
 
@@ -73,6 +73,19 @@ def test_location_compatibility():
     j2 = make_job(location="San Francisco", remote=False)
     s2 = score_match(j2, p)
     assert s2 < s  # location mismatch penalizes
+
+
+def test_onsite_job_neutral_when_no_location_requirement():
+    """matcher allows on-site jobs when profile.remote=True with no location
+    requirement; score_match must not zero them out (neutral 0.5 component)."""
+    from jobharness.scoring.matching import location_compat
+
+    p = base_profile(remote=True, location="")
+    j = make_job(location="New York", remote=False)
+    assert matches_profile(j, p) is True
+    assert location_compat(j, p) == 0.5
+    j_remote = make_job(location="Remote", remote=True)
+    assert location_compat(j_remote, p) == 1.0
 
 
 def test_seniority_experience():

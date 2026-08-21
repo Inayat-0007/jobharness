@@ -3,8 +3,8 @@ from __future__ import annotations
 import sqlite3
 
 from jobharness import algo
-from jobharness.dedupe import DedupeStore, SCHEMA_VERSION
-from jobharness.models import Job, VALID_AUTHENTIC
+from jobharness.dedupe import SCHEMA_VERSION, DedupeStore
+from jobharness.models import VALID_AUTHENTIC, Job
 
 V3_COLUMNS = [
     "canonical_job_id", "block_key", "possible_duplicate_of", "identity_score",
@@ -216,4 +216,48 @@ def test_merge_updates_row_without_inserting(tmp_path):
     srcs = cur.fetchone()[0]
     assert "remoteok" in srcs
     assert "weworkremotely" in srcs
+    store.close()
+
+
+def test_backfill_descriptions_from_reports(tmp_path):
+    """Pre-v3 rows (NULL description) get backfilled from the latest report."""
+
+    from jobharness.report import write_reports
+
+    db = tmp_path / "t.db"
+    store = DedupeStore(db)
+    j = make_job()
+    assert store.upsert(j) is True
+    # simulate a pre-v3 row: description was never stored
+    store.conn.execute("UPDATE jobs SET description=NULL WHERE job_id_hash=?", (j.job_id_hash,))
+    store.conn.commit()
+    store.close()
+
+    # write a report containing the description (latest run wins)
+    j2 = make_job()
+    j2.description = "python api backend full text"
+    j2.compute_hash()
+    write_reports([j2], tmp_path / "reports", run_ts="20260821-000000")
+
+    store = DedupeStore(db, reports_dir=tmp_path / "reports")
+    row = store.conn.execute(
+        "SELECT description FROM jobs WHERE job_id_hash=?", (j.job_id_hash,)
+    ).fetchone()
+    assert row["description"] == "python api backend full text"
+    store.close()
+
+
+def test_backfill_skips_without_reports_dir(tmp_path):
+    store = DedupeStore(tmp_path / "t.db")
+    j = make_job()
+    assert store.upsert(j) is True
+    store.conn.execute("UPDATE jobs SET description=NULL WHERE job_id_hash=?", (j.job_id_hash,))
+    store.conn.commit()
+    store.close()
+
+    store = DedupeStore(tmp_path / "t.db")  # no reports_dir -> no-op
+    row = store.conn.execute(
+        "SELECT description FROM jobs WHERE job_id_hash=?", (j.job_id_hash,)
+    ).fetchone()
+    assert row["description"] is None
     store.close()

@@ -61,9 +61,9 @@ def _score(val) -> str:
 
 
 def compute_stats(jobs: list[dict]) -> dict:
-    statuses = {}
-    decisions = {}
-    sources = {}
+    statuses: dict[str, int] = {}
+    decisions: dict[str, int] = {}
+    sources: dict[str, int] = {}
     new_count = closed_count = remote_count = 0
     total_score = 0.0
     score_n = 0

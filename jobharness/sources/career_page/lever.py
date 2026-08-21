@@ -1,9 +1,9 @@
 from __future__ import annotations
 
-from ..base import SourceAdapter
+from ...fetcher import make_client, random_delay
 from ...models import RawJob
 from ...profile import Profile
-from ...fetcher import make_client, random_delay
+from ..base import SourceAdapter
 
 
 class LeverAdapter(SourceAdapter):

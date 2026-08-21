@@ -2,8 +2,8 @@ from __future__ import annotations
 
 from unittest import mock
 
-from jobharness.models import Job, CLOSED, VALID_AUTHENTIC
 from jobharness import verify
+from jobharness.models import CLOSED, VALID_AUTHENTIC, Job
 
 
 def make_job(url="https://acme.com/careers/1"):
@@ -12,55 +12,66 @@ def make_job(url="https://acme.com/careers/1"):
     return j
 
 
-def test_verify_marks_unreachable_as_closed():
+class _Resp:
+    def __init__(self, status=200, text="Apply now. We are hiring.", url="https://acme.com/careers/1"):
+        self.status_code = status
+        self._text = text
+        self.url = url
+
+    def iter_bytes(self, chunk_size=8192):
+        yield self._text.encode("utf-8")
+
+
+class _Stream:
+    def __init__(self, resp):
+        self._resp = resp
+
+    def __enter__(self):
+        return self._resp
+
+    def __exit__(self, *a):
+        return False
+
+    def stream(self, method, url, timeout=None):
+        return self
+
+
+def test_transient_status_999_is_transient():
+    assert verify._transient_status(999)
+
+
+def test_verify_marks_unreachable_as_degraded():
     job = make_job("https://example.com/gone")
-    with mock.patch("jobharness.verify.make_client") as mc:
-        mc.side_effect = OSError("boom")
-        verify.verify(job)
-    assert job.authentic_status == CLOSED
+
+    class BoomClient:
+        def stream(self, *a, **k):
+            raise OSError("boom")
+
+    with mock.patch("jobharness.verify.get_shared_client", return_value=BoomClient()):
+        with mock.patch("jobharness.verify.time.sleep"):
+            verify.verify(job)
+    assert job.authentic_status == "DEGRADED"
+    assert job.authentic_status != CLOSED
 
 
 def test_verify_marks_404_closed():
     job = make_job()
-    class Resp:
-        status_code = 404
-        text = "Not found"
-        url = "https://example.com/x"
-    class Ctx:
-        def __enter__(self): return self
-        def __exit__(self,*a): return False
-        def get(self,*a,**k): return Resp()
-    with mock.patch("jobharness.verify.make_client", return_value=Ctx()):
+    with mock.patch("jobharness.verify.get_shared_client", return_value=_Stream(_Resp(status=404, text="Not found"))):
         verify.verify(job)
     assert job.authentic_status == CLOSED
 
 
 def test_verify_detects_closed_marker():
     job = make_job()
-    class Resp:
-        status_code = 200
-        text = "This position is no longer accepting applications."
-        url = "https://acme.com/careers/1"
-    class Ctx:
-        def __enter__(self): return self
-        def __exit__(self,*a): return False
-        def get(self,*a,**k): return Resp()
-    with mock.patch("jobharness.verify.make_client", return_value=Ctx()):
+    resp = _Resp(status=200, text="This position is no longer accepting applications.")
+    with mock.patch("jobharness.verify.get_shared_client", return_value=_Stream(resp)):
         verify.verify(job)
     assert job.authentic_status == CLOSED
 
 
 def test_verify_healthy_job_stays_authentic():
     job = make_job()
-    class Resp:
-        status_code = 200
-        text = "Apply now. We are hiring a backend engineer."
-        url = "https://acme.com/careers/1"
-    class Ctx:
-        def __enter__(self): return self
-        def __exit__(self,*a): return False
-        def get(self,*a,**k): return Resp()
-    with mock.patch("jobharness.verify.make_client", return_value=Ctx()):
+    with mock.patch("jobharness.verify.get_shared_client", return_value=_Stream(_Resp())):
         verify.verify(job)
     assert job.authentic_status == VALID_AUTHENTIC
 

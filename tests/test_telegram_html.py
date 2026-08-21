@@ -3,8 +3,18 @@ from __future__ import annotations
 import html as _html
 from unittest import mock
 
-from jobharness.models import Job, VALID_AUTHENTIC
+import pytest
+
+from jobharness.models import VALID_AUTHENTIC, Job
 from jobharness.notify import telegram
+
+
+@pytest.fixture(autouse=True)
+def _reset_telegram_state():
+    telegram._client = None
+    telegram._file_client = None
+    telegram.push_stats.update(sent=0, failed=0)
+    yield
 
 
 def _job_with_specials():
@@ -26,6 +36,7 @@ class FakeResp:
     def __init__(self, status=200, text='{"ok":true}'):
         self.status_code = status
         self._text = text
+        self.headers = {}
 
     @property
     def text(self):
@@ -71,6 +82,20 @@ def test_send_card_uses_html_parse_mode_and_escapes():
     assert "<a href=" in body and "Apply directly</a>" in body
 
 
+def test_send_card_adds_inline_apply_button():
+    job = _job_with_specials()
+    FakeCtx.captured = None
+    fake = FakeCtx(FakeResp(200))
+    with mock.patch.object(telegram.secrets, "get", side_effect=["tok", "chat"]):
+        with mock.patch("httpx.Client", return_value=fake):
+            ok = telegram.send_card(job)
+    assert ok is True
+    payload = FakeCtx.captured
+    assert payload["reply_markup"] == {
+        "inline_keyboard": [[{"text": "Apply", "url": "https://acme.com/careers?a=1&b=2"}]]
+    }
+
+
 def test_send_card_surfaces_non_200_not_silent(capsys):
     job = _job_with_specials()
     fake = FakeCtx(FakeResp(400, '{"ok":false,"description":"bad request"}'))
@@ -80,6 +105,48 @@ def test_send_card_surfaces_non_200_not_silent(capsys):
     assert ok is False
     captured = capsys.readouterr().out
     assert "400" in captured
+
+
+def test_send_card_retries_once_on_429_then_succeeds(monkeypatch):
+    job = _job_with_specials()
+    monkeypatch.setattr(
+        telegram.secrets, "get", lambda k, default="": {"TELEGRAM_BOT_TOKEN": "tok", "TELEGRAM_CHAT_ID": "chat"}.get(k, default)
+    )
+    monkeypatch.setattr(telegram.time, "sleep", lambda *a: None)
+    responses = [FakeResp(429), FakeResp(200)]
+
+    class SeqCtx:
+        def __init__(self):
+            self._i = 0
+
+        def __enter__(self):
+            return self
+
+        def __exit__(self, *a):
+            return False
+
+        def post(self, *a, **k):
+            r = responses[min(self._i, 1)]
+            self._i += 1
+            return r
+
+    with mock.patch("httpx.Client", return_value=SeqCtx()):
+        ok = telegram.send_card(job)
+    assert ok is True
+    assert telegram.push_stats == {"sent": 1, "failed": 0}
+
+
+def test_send_card_failure_increments_failed_stats(monkeypatch, capsys):
+    job = _job_with_specials()
+    monkeypatch.setattr(
+        telegram.secrets, "get", lambda k, default="": {"TELEGRAM_BOT_TOKEN": "tok", "TELEGRAM_CHAT_ID": "chat"}.get(k, default)
+    )
+    fake = FakeCtx(FakeResp(400, "{}"))
+    with mock.patch("httpx.Client", return_value=fake):
+        ok = telegram.send_card(job)
+    assert ok is False
+    assert telegram.push_stats["failed"] == 1
+    assert telegram.push_stats["sent"] == 0
 
 
 def test_notify_new_skips_low_confidence():

@@ -4,16 +4,17 @@ import random
 import re
 import time
 
-from .base import SourceAdapter
-from ..models import RawJob
-from ..profile import Profile
 from ..browser import (
-    open_browser,
-    wait_for_captcha,
     detect_block,
+    open_browser,
     scroll_to_load,
+    wait_for_captcha,
     wait_for_selector_any,
 )
+from ..models import RawJob
+from ..profile import Profile
+from .base import SourceAdapter, raise_navigation_failure
+from .exceptions import BlockedError
 
 
 class InternshalaAdapter(SourceAdapter):
@@ -32,9 +33,9 @@ class InternshalaAdapter(SourceAdapter):
                 return self._fetch(profile, mobile=mobile)
             except Exception as e:
                 last_err = e
-                continue
-        if last_err:
+        if last_err is not None:
             print(f"[{self.name}] all attempts failed: {last_err}")
+            raise last_err
         return []
 
     def _fetch(self, profile: Profile, mobile: bool = False) -> list[RawJob]:
@@ -52,23 +53,20 @@ class InternshalaAdapter(SourceAdapter):
         ) as (_p, browser):
             page = browser.pages[0] if browser.pages else browser.new_page()
             time.sleep(random.uniform(1.5, 3.0))
+            goto_err = None
             try:
                 page.goto(url, timeout=60000, wait_until="domcontentloaded")
-            except Exception:
-                pass
+            except Exception as e:
+                goto_err = e
             time.sleep(4 if not mobile else 3)
             block = detect_block(page)
             if block:
                 if block == "captcha":
                     if not wait_for_captcha(page, self.name, timeout=600):
-                        if not mobile:
-                            raise RuntimeError(f"captcha wait timed out")
-                        return out
+                        raise BlockedError(f"{self.name}: captcha wait timed out")
                     time.sleep(3)
                 else:
-                    if not mobile:
-                        raise RuntimeError(f"blocked: {block}")
-                    return out
+                    raise BlockedError(f"{self.name}: blocked: {block}")
             if not wait_for_selector_any(
                 page,
                 [
@@ -79,6 +77,8 @@ class InternshalaAdapter(SourceAdapter):
                 timeout=20000,
             ):
                 if not page.query_selector(".individual_internship, a[href*='/internship/detail/']"):
+                    if goto_err is not None:
+                        raise_navigation_failure(self.name, page, goto_err)
                     return out
             scroll_to_load(page, max_scrolls=8, pause=0.8)
             cards = page.query_selector_all(
@@ -124,6 +124,8 @@ class InternshalaAdapter(SourceAdapter):
                     seen += 1
                 except Exception:
                     continue
+        if not out and goto_err is not None:
+            raise_navigation_failure(self.name, page, goto_err)
         return out
 
     @staticmethod

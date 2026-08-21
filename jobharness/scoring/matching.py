@@ -84,7 +84,14 @@ def location_compat(job, profile) -> float:
         getattr(job, "location", "") or ""
     ).lower()
     if want_remote:
-        return 1.0 if job_remote else 0.0
+        if job_remote:
+            return 1.0
+        # matcher.py allows on-site jobs when the profile has no location
+        # requirement; score them neutral instead of 0.0 so ranking is not
+        # distorted for a constraint the matcher never enforced.
+        if not (getattr(profile, "location", "") or ""):
+            return 0.5
+        return 0.0
     want_loc = getattr(profile, "location", "") or ""
     if want_loc:
         return 1.0 if algo.location_similarity(getattr(job, "location", ""), want_loc) >= 0.5 else 0.0

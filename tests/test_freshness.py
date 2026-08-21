@@ -1,6 +1,8 @@
 from __future__ import annotations
 
-from jobharness.models import freshness_label, MISSING
+from datetime import datetime, timedelta, timezone
+
+from jobharness.models import MISSING, freshness_label
 
 
 def test_freshness_rfc2822():
@@ -35,3 +37,19 @@ def test_freshness_garbage_falls_back_to_tokens():
 def test_freshness_future_returns_fresh():
     # a date far in the future
     assert freshness_label("2099-01-01") == "fresh"
+
+
+def test_freshness_future_date_is_clamped_to_today():
+    # future-dated postings are clamped to today: 0 days old, never a bonus
+    future = (datetime.now(timezone.utc).date() + timedelta(days=1)).isoformat()
+    assert freshness_label(future) == "fresh"
+
+
+def test_freshness_relative_dates():
+    assert freshness_label("today") == "fresh"
+    assert freshness_label("yesterday") == "fresh"
+    assert freshness_label("2 days ago") == "recent"
+    assert freshness_label("3 days ago") == "recent"
+    assert freshness_label("10 days ago") == "older"
+    assert freshness_label("40 days ago") == "stale"
+    assert freshness_label("2d ago") == "recent"

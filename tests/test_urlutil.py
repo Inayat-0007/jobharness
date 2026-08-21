@@ -1,6 +1,6 @@
 from __future__ import annotations
 
-from jobharness.urlutil import canonicalize_url, apply_url_domain
+from jobharness.urlutil import apply_url_domain, canonicalize_url
 
 
 def test_utm_params_stripped():

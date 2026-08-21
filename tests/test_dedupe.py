@@ -1,7 +1,7 @@
 from __future__ import annotations
 
 from jobharness.dedupe import DedupeStore
-from jobharness.models import Job, VALID_AUTHENTIC
+from jobharness.models import VALID_AUTHENTIC, Job
 
 
 def make_job(source="remoteok"):

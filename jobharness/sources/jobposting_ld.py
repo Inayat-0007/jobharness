@@ -1,19 +1,9 @@
 from __future__ import annotations
 
 import json
-from typing import Iterable
+from collections.abc import Iterable
 
 from ..models import RawJob
-
-
-def _get(obj, *path):
-    cur = obj
-    for k in path:
-        if isinstance(cur, dict):
-            cur = cur.get(k)
-        else:
-            return None
-    return cur
 
 
 def _as_str(v) -> str:

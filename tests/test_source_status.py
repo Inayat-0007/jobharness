@@ -3,17 +3,17 @@ from __future__ import annotations
 from unittest import mock
 
 from jobharness import runner
-from jobharness.fetcher import classify_response
 from jobharness.evidence.source import SourceStatus
+from jobharness.fetcher import classify_response
+from jobharness.models import RawJob
 from jobharness.sources.base import SourceAdapter
 from jobharness.sources.exceptions import (
-    RateLimitedError,
     AuthRequiredError,
-    SourceDownError,
+    BlockedError,
     ParseFailureError,
+    RateLimitedError,
+    SourceDownError,
 )
-from jobharness.models import RawJob
-from jobharness.profile import Profile
 
 
 class _Resp:
@@ -78,6 +78,15 @@ def test_runner_maps_typed_exception_to_status(tmp_path):
     assert result["source_statuses"] == {"fake": "rate_limited"}
 
 
+def test_runner_maps_blocked_exception_to_blocked(tmp_path):
+    def boom(profile):
+        raise BlockedError("captcha wall")
+
+    result = _run(tmp_path, boom)
+    assert result["source_statuses"] == {"fake": "blocked"}
+    assert "fake" not in result["empty"]
+
+
 def test_runner_maps_all_typed_exceptions(tmp_path):
     for exc, expected in [
         (AuthRequiredError("x"), "auth_required"),
@@ -94,10 +103,10 @@ def test_runner_maps_generic_exception_to_source_down(tmp_path):
     assert any("boom" in e for e in result["errors"])
 
 
-def test_runner_empty_source_is_empty_and_blocked(tmp_path):
+def test_runner_empty_source_is_empty(tmp_path):
     result = _run(tmp_path, lambda profile: [])
     assert result["source_statuses"] == {"fake": "empty"}
-    assert "fake" in result["blocked"]
+    assert "fake" in result["empty"]
 
 
 def test_runner_ok_source_with_no_matches(tmp_path):

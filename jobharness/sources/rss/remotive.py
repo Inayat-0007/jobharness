@@ -4,11 +4,10 @@ import re
 
 import feedparser
 
-from ..base import SourceAdapter
+from ...fetcher import make_client
 from ...models import RawJob
 from ...profile import Profile
-from ...fetcher import make_client
-
+from ..base import SourceAdapter
 
 _COMPANY_TITLE_RE = re.compile(r"^(?P<company>.+?)\s*[-\u2013]\s*(?P<title>.+)$")
 
@@ -24,6 +23,7 @@ class RemotiveAdapter(SourceAdapter):
     name = "remotive"
 
     def fetch(self, profile: Profile) -> list[RawJob]:
+        # Remotive exposes a single feed - no pagination to drive by profile.max_pages.
         url = "https://remotive.com/remote-jobs/feed"
         out: list[RawJob] = []
         with make_client() as client:

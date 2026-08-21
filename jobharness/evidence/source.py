@@ -44,4 +44,8 @@ SOURCE_AUTHORITY = {
 
 
 def source_authority(source_name) -> int:
+    # Intent: UNKNOWN sources (1) rank ABOVE known aggregators (0). An unknown
+    # source is typically a direct employer career page we have not mapped yet;
+    # a known aggregator (linkedin/indeed/glassdoor/naukri) is explicitly a
+    # middleman with lower trust. 0 = known aggregator, 1 = unknown/unmapped.
     return SOURCE_AUTHORITY.get(str(source_name or "").lower(), 1)

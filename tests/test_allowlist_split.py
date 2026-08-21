@@ -1,10 +1,8 @@
 from __future__ import annotations
 
-from pathlib import Path
-
-from jobharness.profile import load_profile, Profile
 from jobharness.matcher import matches_profile
 from jobharness.models import Job
+from jobharness.profile import Profile, load_profile
 
 
 def _profile(**kw):
@@ -32,9 +30,11 @@ def test_greenhouse_board_slug_enforced(tmp_path):
 
 def test_career_pages_company_enforced():
     p = _profile(career_pages=[{"company": "Notion", "url": "https://notion.so/careers"}])
-    g = _gh_job("Notion"); g.source_name = "career_page_generic"
+    g = _gh_job("Notion")
+    g.source_name = "career_page_generic"
     assert matches_profile(g, p) is True
-    g2 = _gh_job("Some Startup"); g2.source_name = "career_page_generic"
+    g2 = _gh_job("Some Startup")
+    g2.source_name = "career_page_generic"
     assert matches_profile(g2, p) is False
 
 
@@ -59,5 +59,23 @@ def test_no_allowlist_means_no_company_restriction():
 
 def test_aggregator_sources_not_restricted_by_boards():
     p = _profile(greenhouse_boards=["airbnb"])
-    j = _gh_job("Anyone"); j.source_name = "remoteok"
+    j = _gh_job("Anyone")
+    j.source_name = "remoteok"
     assert matches_profile(j, p) is True  # remoteok not gated by greenhouse boards
+
+
+def test_allowlist_matches_whole_word_not_substring():
+    p = _profile(greenhouse_boards=["airbnb"])
+    # 'Airbnbish' must NOT pass: 'airbnb' is a substring but not a word token.
+    assert matches_profile(_gh_job("Airbnbish Co"), p) is False
+    # Multi-word company with the allowed slug as one token still matches.
+    assert matches_profile(_gh_job("Airbnb Inc."), p) is True
+
+
+def test_company_allowlist_cached_on_profile():
+    p = _profile(greenhouse_boards=["airbnb", "stripe"])
+    assert matches_profile(_gh_job("Airbnb"), p) is True
+    cached = getattr(p, "_allowed_companies", None)
+    assert cached == {"airbnb", "stripe"}
+    assert matches_profile(_gh_job("Stripe"), p) is True
+    assert p._allowed_companies is cached

@@ -1,11 +1,12 @@
 from __future__ import annotations
 
-from jobharness.models import Job, CLOSED, VALID_AUTHENTIC
-from jobharness.evidence.positive import positive_signals
 from jobharness.evidence.negative import negative_signals
+from jobharness.evidence.positive import positive_signals
 from jobharness.evidence.reason import compose_reasons, reason_text
-from jobharness.evidence.source import SOURCE_AUTHORITY, source_authority, SourceStatus
+from jobharness.evidence.source import SOURCE_AUTHORITY, SourceStatus, source_authority
+from jobharness.models import CLOSED, VALID_AUTHENTIC, Job
 from jobharness.scoring.authenticity import authenticity_score
+from jobharness.verify import DEGRADED
 
 
 def rich_job():
@@ -73,6 +74,26 @@ def test_negative_signals_broken_application():
     assert "broken_application" in sig
 
 
+def test_negative_signals_degraded_retry_ctx_emits_unreachable():
+    j = rich_job()
+    j.authentic_status = DEGRADED
+    sig = negative_signals(j, {"retries": 2, "error": "timeout"})
+    assert "verification_unreachable" in sig
+
+
+def test_negative_signals_authentic_normal_ctx_no_unreachable():
+    j = rich_job()
+    sig = negative_signals(j, {"status_code": 200, "redirect_to": "https://acme.com/careers"})
+    assert "verification_unreachable" not in sig
+
+
+def test_negative_signals_authentic_empty_ctx_unchanged():
+    j = rich_job()
+    sig = negative_signals(j)
+    assert "verification_unreachable" not in sig
+    assert sig == []
+
+
 def test_reason_composition():
     reasons = compose_reasons(["official_ats_source", "valid_posting_id"], ["closed_state"])
     assert reasons[0] == "official ATS/API source"
@@ -86,7 +107,11 @@ def test_source_authority_map():
     assert source_authority("google_jobs") == 3
     assert source_authority("remoteok") == 2
     assert source_authority("linkedin") == 0
+    # Intent: unknown/unmapped sources rank above KNOWN aggregators (0),
+    # because an unmapped source is usually a direct employer page.
     assert source_authority("mystery_source") == 1
+    assert source_authority("") == 1
+    assert source_authority(None) == 1
 
 
 def test_authenticity_score_range():

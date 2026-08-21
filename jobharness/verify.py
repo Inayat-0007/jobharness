@@ -1,21 +1,48 @@
-﻿from __future__ import annotations
+from __future__ import annotations
 
-import datetime as dt
-import re
 import time
-from urllib.parse import urlparse
 
 import httpx
 
 from . import algo
-from .models import Job, CLOSED, MISSING, VALID_AUTHENTIC, _parse_date, freshness_label
-from .fetcher import make_client, blocked_response
-from .urlutil import apply_url_domain as _domain
+from .evidence.source import source_authority
+from .fetcher import blocked_response, get_shared_client
+from .models import CLOSED, MISSING, Job, _parse_date, freshness_label
 from .scoring.authenticity import authenticity_score as _authenticity_score
-from .scoring.thresholds import REJECT as _REJECT_DECISION
+from .scoring.thresholds import (
+    REJECT as _REJECT_DECISION,
+)
+from .scoring.thresholds import (
+    SCORE_ATS_BOOST,
+    SCORE_ATS_MIN_AUTHORITY,
+    SCORE_BLOCKED_CAP,
+    SCORE_CAP,
+    SCORE_COMPLETENESS_WEIGHT,
+    SCORE_DOMAIN_MATCH_BOOST,
+    SCORE_DOMAIN_MATCH_CAP,
+    SCORE_EXPIRED_PENALTY,
+    SCORE_FRESH_BONUS,
+    SCORE_OLDER_BONUS,
+    SCORE_RECENT_BONUS,
+    SCORE_STALE_PENALTY,
+)
+from .urlutil import apply_url_domain as _domain
 
 _company_domain_hint = algo.company_domain_hint
 
+# Status for jobs whose posting could not be confirmed reachable because of
+# transient failures (network errors, 408/429/5xx). Unlike CLOSED this is not
+# a hard exclusion: the runner only special-cases "CLOSED".
+DEGRADED = "DEGRADED"
+
+# Retry policy: up to 2 retries with exponential backoff (0.5s, then 2s).
+_RETRY_DELAYS = (0.5, 2.0)
+_MAX_RETRIES = len(_RETRY_DELAYS)
+_VERIFY_TIMEOUT = 20.0
+_SNIPPET_CHARS = 8000
+_STREAM_CHUNK = 8192
+_DEGRADED_PENALTY = 15
+_UNREACHABLE_SIGNAL = "verification_unreachable"
 
 CLOSED_MARKERS = (
     "no longer accepting",
@@ -32,16 +59,61 @@ CLOSED_MARKERS = (
     "job is no longer",
 )
 
-STALE_DAYS = 45
-BLOCKED_RETRY_MS = 0
+
+def _transient_status(code: int) -> bool:
+    # LinkedIn 999 rate limit
+    return code in (408, 429) or code == 999 or 500 <= code < 600
+
+
+class _SnippetResponse(httpx.Response):
+    """Stand-in for fetcher.blocked_response after the stream body is consumed."""
+
+    def __init__(self, status_code: int, snippet: str):
+        super().__init__(status_code=status_code, content=snippet.encode("utf-8"))
+
+
+def _fetch_snippet(client: httpx.Client, url: str, timeout: float = _VERIFY_TIMEOUT) -> tuple[httpx.Response, str]:
+    """GET a URL, streaming only the first ~8k chars of the body.
+
+    Statuses whose bodies are never inspected (404/410, 408/429/5xx) return
+    immediately without downloading the body.  The stream is always closed
+    before returning.
+    """
+    with client.stream("GET", url, timeout=timeout) as resp:
+        if resp.status_code in (404, 410) or _transient_status(resp.status_code):
+            return resp, ""
+        buf = b""
+        for chunk in resp.iter_bytes(_STREAM_CHUNK):
+            buf += chunk
+            if len(buf) >= 2 * _SNIPPET_CHARS:
+                break
+    return resp, buf.decode("utf-8", errors="replace")[:_SNIPPET_CHARS]
+
+
+def _mark_degraded(job: Job, ctx: dict) -> Job:
+    """Mark a job DEGRADED after transient retries are exhausted.
+
+    Never CLOSED: the job may still be live; we just could not confirm it.
+    """
+    job.authentic_status = DEGRADED
+    job.confidence_score = max(0, job.confidence_score - _DEGRADED_PENALTY)
+    job._verify_ctx = ctx
+    for signals in (job.negative_evidence, job.reason):
+        if _UNREACHABLE_SIGNAL not in signals:
+            signals.append(_UNREACHABLE_SIGNAL)
+    return job
 
 
 def verify(job: Job, check_reachable: bool = True) -> Job:
     """Resolve apply_url, follow redirects, confirm not CLOSED, score confidence.
 
-    Sets job.authentic_status = CLOSED (and decision = REJECT) if unreachable
-    or a closed marker found. Computes job.confidence_score (0-100), sets
-    employer_domain, and validates the apply URL host against the company name.
+    Sets job.authentic_status = CLOSED (and decision = REJECT) for hard
+    failures (404/410, closed markers). Transient failures (network errors,
+    408/429/5xx) are retried twice with exponential backoff; if they persist
+    the job is marked DEGRADED with a "verification_unreachable" negative
+    signal and a small confidence penalty (not CLOSED). Computes
+    job.confidence_score (0-100), sets employer_domain, and scores the apply
+    URL host against the company name.
     """
     job.confidence_score = _score_base(job)
     job.authenticity_score = float(_authenticity_score(job))
@@ -50,7 +122,6 @@ def verify(job: Job, check_reachable: bool = True) -> Job:
         job.authentic_status = CLOSED
         job.decision = _REJECT_DECISION
         return job
-    # Stale via validThrough (no network needed) => mark CLOSED if in the past.
     if _is_expired(job.valid_through):
         job.authentic_status = CLOSED
         job.decision = _REJECT_DECISION
@@ -58,17 +129,31 @@ def verify(job: Job, check_reachable: bool = True) -> Job:
     if not check_reachable:
         return job
 
-    try:
-        with make_client(timeout=20.0) as client:
-            resp = client.get(url)
-    except (httpx.HTTPError, OSError):
-        job.authentic_status = CLOSED
-        job.decision = _REJECT_DECISION
-        return job
-    ctx: dict = {"status_code": resp.status_code}
+    client = get_shared_client()
+    resp: httpx.Response | None = None
+    snippet = ""
+    for attempt in range(_MAX_RETRIES + 1):
+        try:
+            resp, snippet = _fetch_snippet(client, url)
+        except (TimeoutError, httpx.HTTPError, OSError) as exc:
+            if attempt < _MAX_RETRIES:
+                time.sleep(_RETRY_DELAYS[attempt])
+                continue
+            return _mark_degraded(job, {"retries": attempt, "error": str(exc)})
+        if _transient_status(resp.status_code):
+            if attempt < _MAX_RETRIES:
+                time.sleep(_RETRY_DELAYS[attempt])
+                continue
+            ctx: dict[str, int | str] = {"status_code": resp.status_code, "retries": attempt}
+            if resp.url:
+                ctx["redirect_to"] = str(resp.url)
+            return _mark_degraded(job, ctx)
+        break
+    assert resp is not None
+    ctx = {"status_code": resp.status_code}
     if resp.url:
         ctx["redirect_to"] = str(resp.url)
-    if resp.status_code in (404, 410) or resp.status_code >= 500:
+    if resp.status_code in (404, 410):
         job.authentic_status = CLOSED
         job.decision = _REJECT_DECISION
         job._verify_ctx = ctx
@@ -76,32 +161,31 @@ def verify(job: Job, check_reachable: bool = True) -> Job:
     if resp.url and str(resp.url) != url:
         job.apply_url_direct = str(resp.url)
     job.employer_domain = _domain(job.apply_url_direct)
-    if blocked_response(resp):
+    if blocked_response(_SnippetResponse(resp.status_code, snippet)):
         ctx["blocked"] = True
         job._verify_ctx = ctx
         job.missing_fields.append("verified_reachable")
-        job.confidence_score = min(job.confidence_score, 40)
+        job.confidence_score = min(job.confidence_score, SCORE_BLOCKED_CAP)
         return job
-    snippet = (resp.text or "")[:8000].lower()
-    marker = next((m for m in CLOSED_MARKERS if m in snippet), "")
+    low = snippet.lower()
+    marker = next((m for m in CLOSED_MARKERS if m in low), "")
     if marker:
         ctx["closed_marker"] = marker
         if "position has been filled" in marker:
             ctx["position_filled"] = True
-        if any(m in snippet for m in ("captcha", "are you a robot", "verify you are human")):
+        if any(m in low for m in ("captcha", "are you a robot", "verify you are human")):
             ctx["captcha"] = True
         job._verify_ctx = ctx
         job.authentic_status = CLOSED
         job.decision = _REJECT_DECISION
         return job
     job._verify_ctx = ctx
-    # Domain matches employer name -> boost confidence
     if job.employer_domain and job.company:
         hint = _company_domain_hint(job.company)
         if hint and hint in job.employer_domain:
-            job.confidence_score = min(100, job.confidence_score + 25)
+            job.confidence_score = min(100, job.confidence_score + SCORE_DOMAIN_MATCH_BOOST)
         else:
-            job.confidence_score = min(job.confidence_score, 55)
+            job.confidence_score = min(job.confidence_score, SCORE_DOMAIN_MATCH_CAP)
     return job
 
 
@@ -122,21 +206,19 @@ def _score_base(job: Job) -> int:
     of the feature values moved into algo.py. Never called "probability".
     """
     feats = algo.authenticity_features(job)
-    score = int(round(feats["completeness"] * 48))
+    score = int(round(feats["completeness"] * SCORE_COMPLETENESS_WEIGHT))
     fr = job.freshness or freshness_label(job.date_posted)
     job.freshness = fr
     if fr == "fresh":
-        score += 24
+        score += SCORE_FRESH_BONUS
     elif fr == "recent":
-        score += 16
+        score += SCORE_RECENT_BONUS
     elif fr == "older":
-        score += 4
+        score += SCORE_OLDER_BONUS
     elif fr == "stale":
-        score -= 10
-    # Aggregator-only sources are slightly less trusted than employer ATS.
-    if job.source_name in ("greenhouse", "lever", "career_page_generic", "usajobs"):
-        score += 10
-    # staleness by age even when date present: use valid_through if available
+        score -= SCORE_STALE_PENALTY
+    if source_authority(job.source_name) >= SCORE_ATS_MIN_AUTHORITY:
+        score += SCORE_ATS_BOOST
     if job.valid_through and _is_expired(job.valid_through):
-        score -= 20
-    return max(0, min(80, score))
+        score -= SCORE_EXPIRED_PENALTY
+    return max(0, min(SCORE_CAP, score))

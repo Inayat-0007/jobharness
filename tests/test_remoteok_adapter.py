@@ -6,9 +6,8 @@ from unittest import mock
 
 import pytest
 
-from jobharness.models import RawJob, MISSING
-from jobharness.sources.api.remoteok import RemoteOKAdapter
 from jobharness.profile import Profile
+from jobharness.sources.api.remoteok import RemoteOKAdapter
 
 FIXTURE = Path(__file__).resolve().parent.parent / "tests" / "fixtures" / "remoteok.json"
 

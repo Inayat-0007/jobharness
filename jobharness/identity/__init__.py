@@ -1,8 +1,8 @@
 from __future__ import annotations
 
-from .posting_id import extract_posting_id
 from .company import company_identity
 from .location import location_bucket
+from .posting_id import extract_posting_id
 from .title import normalize_title, title_stem
 
 __all__ = [

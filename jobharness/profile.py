@@ -2,7 +2,6 @@ from __future__ import annotations
 
 from dataclasses import dataclass, field
 from pathlib import Path
-from typing import Optional, List
 
 import yaml
 
@@ -16,7 +15,7 @@ class Profile:
     location: str = ""
     remote: bool = True
     seniority: str = ""                                # e.g. "mid", "senior", "junior"
-    salary_floor: Optional[int] = None
+    salary_floor: int | None = None
     company_allowlist: list = field(default_factory=list)  # DEPRECATED alias -> greenhouse/lever boards
     greenhouse_boards: list = field(default_factory=list)   # list[str] of Greenhouse board slugs
     lever_boards: list = field(default_factory=list)         # list[str] of Lever board slugs
@@ -26,6 +25,14 @@ class Profile:
     top_n: int = 50
     adzuna_country: str = "us"
     use_ml: bool = False                                # Phase 4 GATE: off by default
+    date_format: str = "DMY"                            # "DMY" (dd/mm/yyyy first) or "MDY"
+    timeout_minutes: int = 60                          # run pipeline budget; 0 = no limit
+    enrich_cap: int = 50                                # max jobs enriched with descriptions per run per adapter
+    browser_career_workers: int = 4                     # parallel headless contexts for career_page_browser
+    max_pages: int = 1                                  # API/RSS pagination cap; 1 preserves legacy behavior
+    career_fetch_workers: int = 4                       # parallel fetches per career/RSS adapter
+    _compiled_patterns: dict | None = None              # lazy matcher regex cache (not serialized)
+    _allowed_companies: set | None = None               # lazy allowlist cache (not serialized)
 
 
 def default_sources() -> dict:
@@ -117,6 +124,13 @@ def save_profile(profile: Profile, path: str | Path) -> None:
         "llm_provider": profile.llm_provider,
         "top_n": profile.top_n,
         "adzuna_country": profile.adzuna_country,
+        "use_ml": profile.use_ml,
+        "date_format": profile.date_format,
+        "timeout_minutes": profile.timeout_minutes,
+        "enrich_cap": profile.enrich_cap,
+        "browser_career_workers": profile.browser_career_workers,
+        "max_pages": profile.max_pages,
+        "career_fetch_workers": profile.career_fetch_workers,
     }
     p.write_text(yaml.safe_dump(data, sort_keys=False), encoding="utf-8")
 

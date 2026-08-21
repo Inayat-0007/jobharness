@@ -13,6 +13,9 @@
 
 name: my-target-live
 
+# Enrichment burst cap: max jobs per run whose detail pages get fetched.
+enrich_cap: 20
+
 # 1) TITLES you want. Job matches if ANY appears in title/role/description.
 # Every hiring label for 0-1 yr / fresher / new grad / intern / apprentice.
 roles:

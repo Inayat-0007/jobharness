@@ -27,6 +27,19 @@ def _no_sleep(monkeypatch):
     monkeypatch.setattr(browser_mod.time, "sleep", lambda s: None)
 
 
+def test_cookie_dir_creates_nested_parents(monkeypatch, tmp_path):
+    """cookie_dir() must create %LOCALAPPDATA%\\jobharness\\cookies even when
+    the LOCALAPPDATA root does not exist yet (mkdir(parents=True))."""
+    cache = tmp_path / "AppData" / "Local"
+    monkeypatch.setenv("LOCALAPPDATA", str(cache))
+    monkeypatch.delenv("COOKIE_DIR", raising=False)
+    monkeypatch.delenv("XDG_CACHE_HOME", raising=False)
+    d = browser_mod.cookie_dir()
+    assert d == cache / "jobharness" / "cookies"
+    assert d.is_dir()
+    assert (d / ".gitkeep").exists()
+
+
 def test_wait_for_login_returns_after_wall_clears(monkeypatch):
     _no_sleep(monkeypatch)
     calls = {"n": 0}
@@ -61,5 +74,17 @@ def test_wait_for_captcha_returns_when_solved(monkeypatch):
 
 def test_wait_for_captcha_times_out(monkeypatch):
     _no_sleep(monkeypatch)
+    page = _FakePage(lambda: True)
+    assert wait_for_captcha(page, "t", timeout=9) is False
+
+
+def test_wait_for_captcha_check_error_returns_false(monkeypatch):
+    """A detect_block that raises must be treated as NOT solved (fail-closed)."""
+    _no_sleep(monkeypatch)
+
+    def boom(page):
+        raise RuntimeError("page closed")
+
+    monkeypatch.setattr(browser_mod, "detect_block", boom)
     page = _FakePage(lambda: True)
     assert wait_for_captcha(page, "t", timeout=9) is False

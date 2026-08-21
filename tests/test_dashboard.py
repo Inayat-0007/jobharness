@@ -1,10 +1,7 @@
 from __future__ import annotations
 
-import json
-from pathlib import Path
-
 from jobharness.dashboard import build_dashboard, collect_reports, compute_stats, description_text
-from jobharness.models import Job, VALID_AUTHENTIC, CLOSED
+from jobharness.models import CLOSED, VALID_AUTHENTIC, Job
 from jobharness.report import write_reports
 
 
@@ -74,3 +71,30 @@ def test_build_dashboard(tmp_path):
 def test_description_text_strips_tags():
     assert description_text("<p>Hello <b>World</b></p>") == "Hello World"
     assert description_text("") == ""
+
+
+def test_dashboard_escapes_closing_script_in_json(tmp_path):
+    """Embedded JSON must not contain a raw </script> (XSS in <script> block)."""
+    from jobharness.models import VALID_AUTHENTIC, Job
+    from jobharness.report import write_reports
+
+    j = Job(title='Backend </script><script>alert(1)</script> Engineer', company='Acme', location='Remote')
+    j.role = 'Backend Engineer'
+    j.apply_url_direct = 'https://acme.com/j/1'
+    j.authentic_status = VALID_AUTHENTIC
+    j.genuinely_new = True
+    j.freshness = 'fresh'
+    j.remote = True
+    j.date_posted = '2026-08-20'
+    j.description = 'Some text'
+    j.seen_sources = ['remoteok']
+    j.decision = 'AUTO_ACCEPT'
+    j.match_score = 0.9
+    j.compute_hash()
+    write_reports([j], tmp_path, run_ts='20260101-000000')
+    out = tmp_path / 'dashboard.html'
+    build_dashboard(tmp_path, out)
+    html = out.read_text(encoding='utf-8')
+    # The escaped form must be present and the dangerous raw sequence absent.
+    assert '<\\/script>' in html
+    assert '</script><script>' not in html

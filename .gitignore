@@ -1,6 +1,7 @@
 # Secrets and runtime state — never commit
 .env
 .env.*
+!.env.example
 cookies/
 *.db
 *.sqlite
@@ -14,3 +15,6 @@ __pycache__/
 build/
 dist/
 
+
+logs/
+*.log
