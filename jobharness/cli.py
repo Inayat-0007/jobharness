@@ -24,6 +24,7 @@ def build_parser() -> argparse.ArgumentParser:
     r.add_argument("--no-verify", action="store_true", help="Skip apply-URL reachability check.")
     r.add_argument("--no-push", action="store_true", help="Skip Telegram push.")
     r.add_argument("--dry-run", action="store_true", help="Alias for --no-verify --no-push.")
+    r.add_argument("--since", type=int, default=None, help="Only include jobs posted within the last N days (incremental mode).")
 
     d = sub.add_parser("dashboard", help="Regenerate the all-runs HTML dashboard.")
     d.add_argument("--reports", default=str(PROJECT_ROOT / "reports"))
@@ -56,6 +57,7 @@ def main(argv: list[str] | None = None) -> int:
             use_llm=use_llm,
             push_telegram=push,
             llm_budget=args.llm_budget if args.llm_budget is not None else DEFAULT_LLM_BUDGET,
+            since_days=args.since,
         )
         _print_summary(result)
         return 0

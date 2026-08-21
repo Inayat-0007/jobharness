@@ -2,6 +2,7 @@ from __future__ import annotations
 
 import datetime as dt
 import threading
+import time
 import traceback
 from collections import Counter
 from concurrent.futures import ThreadPoolExecutor, as_completed
@@ -16,7 +17,7 @@ from .evidence.source import SourceStatus, source_authority
 from .extractor import extract
 from .identity.posting_id import extract_posting_id
 from .matcher import matches_profile
-from .models import CLOSED, MISSING, Job, RawJob
+from .models import CLOSED, MISSING, Job, RawJob, _parse_date
 from .notify import telegram
 from .profile import Profile
 from .registry import enabled_adapters
@@ -57,6 +58,7 @@ def run_once(
     use_llm: bool = True,
     push_telegram: bool = True,
     llm_budget: int = DEFAULT_LLM_BUDGET,
+    since_days: int | None = None,
 ) -> dict:
     secrets.load_env(project_root)
     if top_n is not None:
@@ -117,6 +119,19 @@ def run_once(
             continue
         seen_keys.add(key)
         unique_raws.append(raw)
+
+    # Incremental mode: --since N days drops jobs whose posted_date is older.
+    # Unparseable dates are kept (cannot prove staleness; default behavior).
+    if since_days is not None and since_days > 0:
+        cutoff = time.time() - since_days * 86400
+        kept = []
+        for raw in unique_raws:
+            parsed = _parse_date(raw.posted_date)
+            if parsed is None or parsed.timestamp() >= cutoff:
+                kept.append(raw)
+        if len(kept) != len(unique_raws):
+            print(f"[jobharness] --since {since_days}d kept {len(kept)}/{len(unique_raws)} raw jobs")
+        unique_raws = kept
 
     llm_remaining = llm_budget if use_llm else 0
     matched: list[Job] = []
@@ -209,7 +224,7 @@ def run_once(
     # Cross-run fuzzy linkage runs BEFORE upsert: HIGH matches are merged into
     # the stored row (no new row, no alert), MEDIUM gets possible_duplicate_of
     # + REVIEW decision, LOW follows the normal new path.
-    store = DedupeStore(db_path)
+    store = DedupeStore(db_path, reports_dir=reports_dir)
     try:
         for job in matched:
             try:

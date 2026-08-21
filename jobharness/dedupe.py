@@ -1,5 +1,6 @@
 ﻿from __future__ import annotations
 
+import json
 import sqlite3
 import time
 from pathlib import Path
@@ -107,7 +108,12 @@ def _store_block_key(keys) -> str:
 
 
 class DedupeStore:
-    def __init__(self, db_path: str | Path = "jobs.db", max_age_days: int = 90):
+    def __init__(
+        self,
+        db_path: str | Path = "jobs.db",
+        max_age_days: int = 90,
+        reports_dir: str | Path | None = None,
+    ):
         self.path = str(db_path)
         Path(self.path).parent.mkdir(parents=True, exist_ok=True)
         self.conn = sqlite3.connect(self.path)
@@ -117,7 +123,55 @@ class DedupeStore:
         self.conn.execute("PRAGMA busy_timeout=5000")
         self.conn.execute("PRAGMA journal_mode=WAL")
         self._migrate()
+        self._backfill_descriptions(reports_dir)
         self._prune(max_age_days)
+
+    def _backfill_descriptions(self, reports_dir) -> None:
+        """Fill NULL/empty `description` from the latest matching row in
+        `reports/*/report.json`.
+
+        Pre-v3 rows were stored without a description, which starves fuzzy
+        merge for old rows (description similarity is a composite input).
+        Runs once at open time; newest report run wins per job_id_hash.
+        """
+        if not reports_dir:
+            return
+        rd = Path(reports_dir)
+        if not rd.is_dir():
+            return
+        cur = self.conn.cursor()
+        rows = cur.execute(
+            "SELECT job_id_hash FROM jobs WHERE description IS NULL OR description=''"
+        ).fetchall()
+        if not rows:
+            return
+        descriptions: dict[str, str] = {}
+        for run_dir in sorted(rd.iterdir(), reverse=True):
+            if not run_dir.is_dir():
+                continue
+            jf = run_dir / "report.json"
+            if not jf.exists():
+                continue
+            try:
+                parsed = json.loads(jf.read_text(encoding="utf-8"))
+            except (json.JSONDecodeError, OSError):
+                continue
+            for j in parsed:
+                h = j.get("job_id_hash")
+                desc = j.get("description")
+                if h and desc and h not in descriptions:
+                    descriptions[h] = desc
+        updated = 0
+        for row in rows:
+            desc = descriptions.get(row["job_id_hash"])
+            if desc:
+                cur.execute(
+                    "UPDATE jobs SET description=? WHERE job_id_hash=?",
+                    (desc, row["job_id_hash"]),
+                )
+                updated += 1
+        if updated:
+            self.conn.commit()
 
     def _migrate(self) -> None:
         cur = self.conn.cursor()
