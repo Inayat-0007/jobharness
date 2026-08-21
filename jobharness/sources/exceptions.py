@@ -19,3 +19,7 @@ class SourceDownError(SourceFetchError):
 
 class ParseFailureError(SourceFetchError):
     """Source responded but the payload could not be parsed."""
+
+
+class BlockedError(SourceFetchError):
+    """Source responded with a block page (403/429 or CAPTCHA markers)."""

@@ -31,6 +31,19 @@ def _matches_any(text: str, terms: list[str]) -> bool:
     return any(re.search(r"\b" + re.escape(term.lower()) + r"\b", t) for term in terms if term)
 
 
+def _company_allowed(company: str, allowed: set[str]) -> bool:
+    """Word-boundary match of allowlist tokens against the company name.
+
+    Substring matching falsely admitted e.g. 'airbnbish' for 'airbnb'; tokens
+    must match a whole word of the company name ('Airbnb Inc.' -> 'airbnb')."""
+    if not allowed or not company:
+        return False
+    c = company.lower()
+    if c in allowed:
+        return True
+    return any(t in allowed for t in re.findall(r"[a-z0-9]+", c))
+
+
 def matches_profile(job: Job, profile: Profile) -> bool:
     """Apply title/keyword/exclude/seniority/salary/location filters. Pure-source-derived only."""
     haystack = f"{job.title} {job.role} {job.description if hasattr(job,'description') else ''}".lower()
@@ -101,7 +114,7 @@ def matches_profile(job: Job, profile: Profile) -> bool:
                 elif isinstance(c, dict) and c.get("company"):
                     allowed.add(str(c["company"]).lower())
             allowed.discard("")
-            if allowed and job.company.lower() not in allowed and not any(a in job.company.lower() for a in allowed):
+            if allowed and not _company_allowed(job.company, allowed):
                 return False
 
     return True

@@ -406,6 +406,7 @@ def authenticity_features(job) -> dict[str, float]:
     """Raw feature vector for authenticity (never called "probability").
     Consumed by verify (Phase 1) and logistic regression (Phase 4)."""
     from .models import CLOSED, MISSING
+    from .scoring.thresholds import REQUIRED_JOB_FIELDS
 
     company = getattr(job, "company", "") or ""
     hint = company_domain_hint(company)
@@ -415,9 +416,8 @@ def authenticity_features(job) -> dict[str, float]:
     freshness = getattr(job, "freshness", "") or ""
     fresh_score = {"fresh": 1.0, "recent": 0.7, "older": 0.4, "stale": 0.1}.get(freshness, 0.0)
 
-    required = ("title", "company", "apply_url_direct", "date_posted", "location", "experience_needed")
-    present = sum(1 for f in required if (getattr(job, f, "") or "") not in ("", MISSING))
-    completeness = present / len(required)
+    present = sum(1 for f in REQUIRED_JOB_FIELDS if (getattr(job, f, "") or "") not in ("", MISSING))
+    completeness = present / len(REQUIRED_JOB_FIELDS)
 
     valid_through = getattr(job, "valid_through", "") or ""
     vt_valid = 0.0
@@ -435,6 +435,9 @@ def authenticity_features(job) -> dict[str, float]:
         "domain_match": domain_match,
         "posting_id": 1.0 if (getattr(job, "posting_id", "") or "") else 0.0,
         "http_status": 0.0 if getattr(job, "authentic_status", "") == CLOSED else 1.0,
+        # "validThrough" is the schema.org JobPosting field name from the API
+        # payloads (greenhouse/lever/JSON-LD). Kept camelCase to match the
+        # feature-contract documented in the Phase-4 training schema.
         "validThrough": vt_valid,
         "freshness": fresh_score,
         "completeness": completeness,

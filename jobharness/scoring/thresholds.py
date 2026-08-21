@@ -36,3 +36,15 @@ SCORE_BLOCKED_CAP = 40
 # Sources with source_authority >= this value get the employer-ATS trust boost
 # in confidence scoring (aggregators are 2 or below on the authority scale).
 SCORE_ATS_MIN_AUTHORITY = 3
+
+# Fields a Job must have to be considered complete. Single source of truth for
+# both Job.mark_missing() and algo.authenticity_features() (completeness), so
+# the two can never drift apart.
+REQUIRED_JOB_FIELDS = (
+    "title",
+    "company",
+    "apply_url_direct",
+    "date_posted",
+    "location",
+    "experience_needed",
+)

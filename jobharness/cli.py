@@ -78,7 +78,7 @@ def _print_summary(r: dict) -> None:
     print(f"Matched          : {r['total_matched']}")
     print(f"Genuinely new    : {r['report']['new_count']}")
     print(f"Closed/removed   : {r['report']['closed_count']}")
-    print(f"Blocked sources  : {r['blocked']}")
+    print(f"Empty sources    : {r['empty']}")
     print(f"Telegram pushed  : {r['pushed']}")
     print(f"Errors           : {r['errors']}")
     print(f"HTML report      : {r['report']['html']}")

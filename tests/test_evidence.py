@@ -86,7 +86,11 @@ def test_source_authority_map():
     assert source_authority("google_jobs") == 3
     assert source_authority("remoteok") == 2
     assert source_authority("linkedin") == 0
+    # Intent: unknown/unmapped sources rank above KNOWN aggregators (0),
+    # because an unmapped source is usually a direct employer page.
     assert source_authority("mystery_source") == 1
+    assert source_authority("") == 1
+    assert source_authority(None) == 1
 
 
 def test_authenticity_score_range():

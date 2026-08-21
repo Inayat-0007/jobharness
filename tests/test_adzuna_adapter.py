@@ -7,6 +7,7 @@ import pytest
 
 from jobharness.profile import Profile
 from jobharness.sources.api.adzuna import AdzunaAdapter
+from jobharness.sources.exceptions import BlockedError
 
 
 def _payload(results):
@@ -116,10 +117,11 @@ def test_adzuna_missing_keys_returns_empty(monkeypatch):
     assert AdzunaAdapter().fetch(Profile(roles=["x"])) == []
 
 
-def test_adzuna_blocked_response_returns_empty(adapter):
+def test_adzuna_blocked_response_raises_blocked(adapter):
     with mock.patch("jobharness.sources.api.adzuna.make_client", return_value=FakeCtx(_payload([]))):
         with mock.patch("jobharness.sources.api.adzuna.blocked_response", return_value=True):
-            assert adapter.fetch(Profile(roles=["x"])) == []
+            with pytest.raises(BlockedError):
+                adapter.fetch(Profile(roles=["x"]))
 
 
 def test_adzuna_missing_result_fields_default_empty(adapter):

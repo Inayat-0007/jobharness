@@ -7,6 +7,7 @@ from dataclasses import dataclass, field, asdict
 from typing import Optional
 
 from .algo import normalize_company, description_fingerprint as _description_fingerprint
+from .scoring.thresholds import REQUIRED_JOB_FIELDS
 
 
 def _norm(text: Optional[str]) -> str:
@@ -123,7 +124,7 @@ class Job:
 
     def mark_missing(self) -> None:
         missing = []
-        for f in ("title", "company", "apply_url_direct", "date_posted"):
+        for f in REQUIRED_JOB_FIELDS:
             v = getattr(self, f, "")
             if not v or v == MISSING:
                 missing.append(f)

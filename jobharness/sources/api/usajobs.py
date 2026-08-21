@@ -2,6 +2,7 @@ from __future__ import annotations
 
 from ... import secrets
 from ..base import SourceAdapter
+from ..exceptions import BlockedError
 from ...models import RawJob
 from ...profile import Profile
 from ...fetcher import make_client, blocked_response, random_delay
@@ -29,7 +30,7 @@ class USAJobsAdapter(SourceAdapter):
         with make_client() as client:
             resp = client.get(url, params=params, headers=headers)
             if blocked_response(resp):
-                return out
+                raise BlockedError(f"{self.name}: blocked response (HTTP {resp.status_code})")
             try:
                 data = resp.json()
             except Exception:

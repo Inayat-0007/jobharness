@@ -7,7 +7,6 @@ import threading
 import time
 from contextlib import contextmanager, nullcontext
 from pathlib import Path
-from typing import Optional
 
 from . import secrets
 from .fetcher import pick_proxy, UA_POOL
@@ -31,7 +30,23 @@ def _context_dir(source: str) -> str:
 
 
 def cookie_dir() -> Path:
-    p = Path(__file__).resolve().parent.parent / "cookies"
+    """Directory for per-source browser profiles/cookies.
+
+    COOKIE_DIR env var overrides the location; otherwise the user cache dir
+    (%LOCALAPPDATA%\\jobharness\\cookies on Windows, XDG cache elsewhere).
+    Falls back to the legacy repo-tree `cookies/` when no cache dir exists.
+    Runtime state is never committed to the repository.
+    """
+    env = os.environ.get("COOKIE_DIR", "").strip()
+    if env:
+        p = Path(env)
+    else:
+        cache = os.environ.get("LOCALAPPDATA") or os.environ.get("XDG_CACHE_HOME") or ""
+        p = (
+            Path(cache) / "jobharness" / "cookies"
+            if cache
+            else Path(__file__).resolve().parent.parent / "cookies"
+        )
     p.mkdir(exist_ok=True)
     (p / ".gitkeep").touch(exist_ok=True)
     # Mark the cookies dir private if possible (POSIX); no-op on Windows.
@@ -232,9 +247,7 @@ def launch_stealth_context(
     # A real profile already carries the user's own UA/locale/timezone; faking
     # them would fingerprint-mismatch the existing cookies. Fresh profiles get
     # the stealth fingerprint (India portals get Asia/Kolkata + en-IN).
-    if _REAL_PROFILE:
-        pass
-    else:
+    if not _REAL_PROFILE:
         launch_opts["user_agent"] = ua
         launch_opts["locale"] = locale
         launch_opts["timezone_id"] = timezone_id

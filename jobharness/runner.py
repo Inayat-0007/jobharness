@@ -5,6 +5,7 @@ import threading
 import traceback
 from collections import Counter
 from concurrent.futures import ThreadPoolExecutor, as_completed
+from pathlib import Path
 
 from . import secrets, algo
 from .models import Job, RawJob, MISSING, CLOSED
@@ -27,6 +28,7 @@ from .sources.exceptions import (
     AuthRequiredError,
     SourceDownError,
     ParseFailureError,
+    BlockedError,
 )
 
 
@@ -63,8 +65,8 @@ def run_once(
     if top_n is not None:
         profile.top_n = top_n
     run_ts = dt.datetime.now().strftime("%Y%m%d-%H%M%S")
-    db_path = f"{project_root}/jobs.db"
-    reports_dir = f"{project_root}/reports"
+    db_path = Path(project_root) / "jobs.db"
+    reports_dir = Path(project_root) / "reports"
 
     adapters = enabled_adapters(profile)
     if source_filter:
@@ -72,7 +74,7 @@ def run_once(
 
     print(f"[jobharness] run {run_ts} | sources: {[a.name for a in adapters]}")
     raw_jobs: list[RawJob] = []
-    blocked: list[str] = []
+    empty: list[str] = []
     errors: list[str] = []
     errors_lock = threading.Lock()
     source_statuses: dict[str, SourceStatus] = {}
@@ -89,6 +91,8 @@ def run_once(
             return adapter.name, [], f"{e}", SourceStatus.SOURCE_DOWN
         except ParseFailureError as e:
             return adapter.name, [], f"{e}", SourceStatus.PARSE_FAILURE
+        except BlockedError as e:
+            return adapter.name, [], f"{e}", SourceStatus.BLOCKED
         except Exception as e:
             return adapter.name, [], f"{e}\n{traceback.format_exc()}", SourceStatus.SOURCE_DOWN
 
@@ -100,7 +104,7 @@ def run_once(
             if err:
                 errors.append(f"{name}: {err.splitlines()[0]}")
             if not jobs and not err:
-                blocked.append(name)
+                empty.append(name)
             raw_jobs.extend(jobs)
             print(f"[jobharness] {name}: {len(jobs)} raw")
 
@@ -272,7 +276,7 @@ def run_once(
     decisions = {k: v for k, v in Counter(j.decision or "NONE" for j in matched).items() if v}
     print(
         f"[jobharness] done: match={rep['total']} new={rep['new_count']} closed={rep['closed_count']} "
-        f"pushed={pushed} blocked={blocked} errors={len(errors)}"
+        f"pushed={pushed} empty={empty} errors={len(errors)}"
     )
     print(f"[jobharness] decisions: {decisions}")
     print(
@@ -284,7 +288,7 @@ def run_once(
     return {
         "run_ts": run_ts,
         "report": rep,
-        "blocked": blocked,
+        "empty": empty,
         "errors": errors,
         "pushed": pushed,
         "total_raw": len(raw_jobs),

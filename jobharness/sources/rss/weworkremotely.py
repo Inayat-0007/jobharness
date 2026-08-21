@@ -1,7 +1,5 @@
 from __future__ import annotations
 
-import re
-
 import feedparser
 
 from ..base import SourceAdapter
@@ -24,9 +22,6 @@ def _parse_company_title(entry_title: str):
     if len(parts) == 2:
         return parts[0].strip(), parts[1].strip()
     return "", entry_title.strip()
-
-
-WWWWW_COMPANY_RE = re.compile(r"Company:\s*(.+?)\s*</?a>", re.IGNORECASE)
 
 
 class WeWorkRemotelyAdapter(SourceAdapter):

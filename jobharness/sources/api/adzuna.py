@@ -2,7 +2,7 @@ from __future__ import annotations
 
 from ... import secrets
 from ..base import SourceAdapter
-from ..exceptions import ParseFailureError
+from ..exceptions import ParseFailureError, BlockedError
 from ...models import RawJob
 from ...profile import Profile
 from ...fetcher import make_client, blocked_response, random_delay
@@ -59,7 +59,7 @@ class AdzunaAdapter(SourceAdapter):
                 headers={"Accept": "application/json"},
             )
             if blocked_response(resp):
-                return out
+                raise BlockedError(f"{self.name}: blocked response (HTTP {resp.status_code})")
             try:
                 data = resp.json()
             except Exception:

@@ -75,6 +75,19 @@ def test_location_compatibility():
     assert s2 < s  # location mismatch penalizes
 
 
+def test_onsite_job_neutral_when_no_location_requirement():
+    """matcher allows on-site jobs when profile.remote=True with no location
+    requirement; score_match must not zero them out (neutral 0.5 component)."""
+    from jobharness.scoring.matching import location_compat
+
+    p = base_profile(remote=True, location="")
+    j = make_job(location="New York", remote=False)
+    assert matches_profile(j, p) is True
+    assert location_compat(j, p) == 0.5
+    j_remote = make_job(location="Remote", remote=True)
+    assert location_compat(j_remote, p) == 1.0
+
+
 def test_seniority_experience():
     p = base_profile(seniority="senior")
     j = make_job(seniority="senior level")

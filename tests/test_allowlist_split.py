@@ -61,3 +61,11 @@ def test_aggregator_sources_not_restricted_by_boards():
     p = _profile(greenhouse_boards=["airbnb"])
     j = _gh_job("Anyone"); j.source_name = "remoteok"
     assert matches_profile(j, p) is True  # remoteok not gated by greenhouse boards
+
+
+def test_allowlist_matches_whole_word_not_substring():
+    p = _profile(greenhouse_boards=["airbnb"])
+    # 'Airbnbish' must NOT pass: 'airbnb' is a substring but not a word token.
+    assert matches_profile(_gh_job("Airbnbish Co"), p) is False
+    # Multi-word company with the allowed slug as one token still matches.
+    assert matches_profile(_gh_job("Airbnb Inc."), p) is True

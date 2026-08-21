@@ -1,8 +1,10 @@
 from __future__ import annotations
 
 import time
+import urllib.parse
 
 from .base import SourceAdapter
+from .exceptions import BlockedError
 from ..models import RawJob
 from ..profile import Profile
 from ..fetcher import make_client, blocked_response, random_delay, resp_text
@@ -23,10 +25,11 @@ class GoogleJobsAdapter(SourceAdapter):
     name = "google_jobs"
 
     def fetch(self, profile: Profile) -> list[RawJob]:
-        query = "+".join((profile.roles[:1] + profile.keywords[:2])) or "software+engineer"
+        terms = profile.roles[:1] + profile.keywords[:2] or ["software+engineer"]
+        query = "+".join(urllib.parse.quote_plus(t) for t in terms)
         loc = profile.location or ("remote" if profile.remote else "")
         if loc:
-            query += "+" + loc.replace(" ", "+")
+            query += "+" + urllib.parse.quote_plus(loc)
         out: list[RawJob] = []
         for attempt in range(3):
             random_delay(1.0, 3.0)
@@ -45,15 +48,17 @@ class GoogleJobsAdapter(SourceAdapter):
                 resp = client.get(url)
             except Exception:
                 return []
-            if resp.status_code != 200 or blocked_response(resp):
+            if resp.status_code != 200:
                 return []
+            if blocked_response(resp):
+                raise BlockedError(f"{self.name}: blocked response (HTTP {resp.status_code})")
             html = resp_text(resp)
         # Path 1: proper schema.org JobPosting JSON-LD blocks.
         out = extract_jobpostings_from_html(html, self.name, url)
         if out:
             return out
         # Path 2: Google embeds job results inside <script> blobs that contain
-        # JobPosting objects (sometimes escaped JSON)..Scan for any JSON object
+        # JobPosting objects (sometimes escaped JSON). Scan for any JSON object
         # containing a "JobPosting" type marker.
         import json
         import re

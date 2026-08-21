@@ -1,14 +1,11 @@
 ﻿from __future__ import annotations
 
-import datetime as dt
-import re
 import time
-from urllib.parse import urlparse
 
 import httpx
 
 from . import algo
-from .models import Job, CLOSED, MISSING, VALID_AUTHENTIC, _parse_date, freshness_label
+from .models import Job, CLOSED, MISSING, _parse_date, freshness_label
 from .fetcher import make_client, blocked_response, resp_text
 from .urlutil import apply_url_domain as _domain
 from .scoring.authenticity import authenticity_score as _authenticity_score
@@ -47,16 +44,13 @@ CLOSED_MARKERS = (
     "job is no longer",
 )
 
-STALE_DAYS = 45
-BLOCKED_RETRY_MS = 0
-
 
 def verify(job: Job, check_reachable: bool = True) -> Job:
     """Resolve apply_url, follow redirects, confirm not CLOSED, score confidence.
 
     Sets job.authentic_status = CLOSED (and decision = REJECT) if unreachable
     or a closed marker found. Computes job.confidence_score (0-100), sets
-    employer_domain, and validates the apply URL host against the company name.
+    employer_domain, and scores the apply URL host against the company name.
     """
     job.confidence_score = _score_base(job)
     job.authenticity_score = float(_authenticity_score(job))
