@@ -106,3 +106,29 @@ def test_dry_run_calls_no_push_no_verify(tmp_path, monkeypatch):
     )
     assert result["total_matched"] >= 1
     assert result["pushed"] == 0
+
+
+def test_matcher_exception_fails_closed(tmp_path, monkeypatch):
+    """A matcher that raises must NOT let the job through (fail-closed)."""
+    profile_path = _write_profile(tmp_path)
+    monkeypatch.setattr(remoteok_mod.RemoteOKAdapter, "fetch", lambda self, p: make_raw()[:1])
+    monkeypatch.setattr(
+        "jobharness.runner.enabled_adapters",
+        lambda profile: [remoteok_mod.RemoteOKAdapter()],
+    )
+    monkeypatch.setattr("jobharness.runner.telegram", mock.MagicMock(configured=lambda: False))
+
+    def boom(job, profile):
+        raise RuntimeError("matcher exploded")
+
+    monkeypatch.setattr("jobharness.runner.matches_profile", boom)
+
+    from jobharness.profile import load_profile
+
+    prof = load_profile(profile_path)
+    result = runner.run_once(
+        prof, str(tmp_path), top_n=5, verify_reachable=False, use_llm=False, push_telegram=False
+    )
+    # Fail-closed: job must NOT be matched, and the error must be recorded.
+    assert result["total_matched"] == 0
+    assert any("matcher[remoteok]" in e and "matcher exploded" in e for e in result["errors"])

@@ -63,3 +63,15 @@ def test_wait_for_captcha_times_out(monkeypatch):
     _no_sleep(monkeypatch)
     page = _FakePage(lambda: True)
     assert wait_for_captcha(page, "t", timeout=9) is False
+
+
+def test_wait_for_captcha_check_error_returns_false(monkeypatch):
+    """A detect_block that raises must be treated as NOT solved (fail-closed)."""
+    _no_sleep(monkeypatch)
+
+    def boom(page):
+        raise RuntimeError("page closed")
+
+    monkeypatch.setattr(browser_mod, "detect_block", boom)
+    page = _FakePage(lambda: True)
+    assert wait_for_captcha(page, "t", timeout=9) is False

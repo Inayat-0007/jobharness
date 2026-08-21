@@ -141,8 +141,9 @@ def run_once(
         try:
             if not matches_profile(job, profile):
                 return None
-        except Exception:
-            pass
+        except Exception as e:
+            errors.append(f"matcher[{job.source_name}]: {e}")
+            return None
         return job
 
     # Extraction is network-bound (LLM calls); parallelize within the budget.

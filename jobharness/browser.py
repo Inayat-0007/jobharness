@@ -134,8 +134,9 @@ def wait_for_captcha(page, source: str, timeout: int = 600) -> bool:
         try:
             if detect_block(page) != "captcha":
                 return True
-        except Exception:
-            return True
+        except Exception as e:
+            print(f"[{source}] CAPTCHA check error: {e}")
+            return False
         if waited % 30 == 0:
             print(f"[{source}] still waiting for CAPTCHA... ({waited}s)")
     print(f"[{source}] CAPTCHA wait timed out after {timeout}s")
