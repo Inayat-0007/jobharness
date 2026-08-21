@@ -297,3 +297,33 @@ All offline — network mocked or fixture-driven.
 ---
 
 *Report compiled from live repository state, full source read, DB inspection (v3 migration verified on a copy), a fresh `pytest` run (170 passed), and a live harvest run (remoteok, 100 raw → 1 matched, 0 new). All facts verified as of 2026-08-21 04:48 IST.*
+
+---
+
+## Changelog — India fresher pipeline (2026-08-21)
+
+**Bug fixes**
+- `jobharness/browser.py`: `cookie_dir()` recursively called itself inside `Path.chmod(cookie_dir(), ...)` — every browser adapter crashed with `RecursionError`. Fixed to `Path.chmod(p, ...)`.
+- LinkedIn login: adapter had no login gate — sign-in walls failed silently. Added `_login_wall` detection + `wait_for_login` polling (auto-continue, no ENTER needed).
+- LinkedIn guest detail fetch: card URLs carry tracking params → HTTP 999. Clean URLs + 999 retry/backoff.
+- Matcher: "Bangalore, Karnataka" (no literal "India") was rejected — added 65 India city/state hints.
+- Google OAuth reCAPTCHA walls ("Could not connect to the reCAPTCHA service") — documented root cause (Google anti-bot on automated sessions), auto-reload on error text, guidance to use email+password.
+
+**New adapters (all registered + tested)**
+- `linkedin_guest`: public guest jobs API, 10 pages, description enrichment — highest-yield India source (50+ fresher jobs/run: Microsoft, Amex, NVIDIA, Oracle, Accenture...).
+- `career_page_browser`: parallel headless rendering of 46 employer career pages; DOM-anchor extraction + JSON-LD + detail enrichment (modern career sites serve no JSON-LD in static HTML).
+- `naukri` / `hirist` / `internshala` / `wellfound`: browser adapters with auto-detect login/CAPTCHA gates.
+- Lever API found deprecated platform-wide (all slugs 404) — disabled in production profile.
+
+**Browser infrastructure**
+- Real Chrome (`channel="chrome"`) preferred over bundled Chromium; context-level stealth init script; `ignore_https_errors`; per-portal India fingerprint (`Asia/Kolkata` + `en-IN`); optional real-profile reuse (`BROWSER_USER_DATA_DIR`); serialized human gates; `serialize=False` for headless career workers; parallel career scraping with live progress.
+
+**Matching & profile**
+- Strict India-only / no-remote rules; fresher-only title sets (Intern, Apprentice, New Grad, Early Career, Graduate Trainee...); experience excludes (2+ yrs and up; `1+ year` kept as the standard entry-level label); keyword check skipped only when description is unavailable.
+
+**Delivery**
+- A4 PDF reports via headless Chromium (`report.pdf`); Telegram sends PDF + per-job cards for REVIEW and AUTO_ACCEPT genuinely-new jobs.
+
+**Tests:** 170 → 185 (registry, matcher location rules, browser gates, LinkedIn guest parser). All offline.
+
+*Changelog appended 2026-08-21 08:20 IST.*
