@@ -2,11 +2,15 @@ from __future__ import annotations
 
 from concurrent.futures import ThreadPoolExecutor
 
+from jobharness.logging import get_logger
+
 from ...fetcher import make_client, random_delay
 from ...models import RawJob
 from ...profile import Profile
 from ..base import SourceAdapter
 from ..exceptions import ParseFailureError
+
+_LOG = get_logger(__name__)
 
 
 class GreenhouseAdapter(SourceAdapter):
@@ -36,6 +40,9 @@ class GreenhouseAdapter(SourceAdapter):
         random_delay()
         with make_client() as client:
             resp = client.get(url)
+            if resp.status_code == 404:
+                _LOG.warning("greenhouse board %r not found (404) - remove from profile", board)
+                return []
             if resp.status_code != 200:
                 return []
             try:

@@ -3,7 +3,14 @@ from __future__ import annotations
 from jobharness.matcher import matches_profile
 from jobharness.models import Job
 from jobharness.profile import Profile
-from jobharness.scoring.matching import score_match, skill_normalize
+from jobharness.scoring.matching import (
+    BM25_SATURATION_TERMS,
+    SKILL_SATURATION_K,
+    bm25_coverage,
+    score_match,
+    skill_normalize,
+    skill_overlap,
+)
 
 
 def make_job(title="Backend Engineer", desc="python api backend", **kw):
@@ -21,6 +28,19 @@ def base_profile(**kw):
     for k, v in kw.items():
         setattr(p, k, v)
     return p
+
+
+def test_saturation_constants():
+    # Calibration constants (2026-08): denominators cap at ~8 matched
+    # terms/keywords so large production profiles do not dilute scores.
+    # Detailed behavior is pinned in tests/test_scoring_calibration.py.
+    assert BM25_SATURATION_TERMS == 8
+    assert SKILL_SATURATION_K == 8
+    query = [f"t{i}" for i in range(74)]
+    assert bm25_coverage(query, query[:8]) == 1.0
+    # 1-keyword profile is not punished by the cap: single hit still scores.
+    p = Profile(keywords=["python"])
+    assert skill_overlap(make_job(desc="python api backend"), p) > 0
 
 
 def test_skill_synonyms():

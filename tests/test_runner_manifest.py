@@ -203,9 +203,12 @@ def test_timeout_aborts_stages_but_still_writes_reports_and_manifest(tmp_path, m
     assert (tmp_path / "reports" / result["run_ts"] / "report.json").exists()
 
 
-def test_degraded_jobs_withheld_from_push_but_kept_in_new_count(tmp_path, monkeypatch, caplog):
-    """DEGRADED jobs (verification could not confirm reachability) stay in
-    reports and new_count but are excluded from the telegram push list."""
+def test_degraded_jobs_pushed_with_warning_and_kept_in_new_count(tmp_path, monkeypatch, caplog):
+    """DEGRADED jobs (verification could not confirm reachability - e.g. the
+    source rate-limited the verify check) stay in reports and new_count AND
+    are pushed to telegram: the listing fetch succeeded so the job is real;
+    the card carries a visible unverified-link warning instead of the job
+    being silently withheld."""
     caplog.set_level("INFO")
     telegram = mock.MagicMock()
     telegram.configured.return_value = True
@@ -231,13 +234,15 @@ def test_degraded_jobs_withheld_from_push_but_kept_in_new_count(tmp_path, monkey
         verify_reachable=True, push_telegram=True,
     )
 
-    # Only the AUTHENTIC job was pushed; the DEGRADED one was withheld.
-    assert result["pushed"] == 1
+    # Both genuinely-new jobs are pushed; the DEGRADED one is included
+    # (its card carries the warning) and logged as such.
+    assert result["pushed"] == 2
     assert len(pushed_lists) == 1
     pushed = pushed_lists[0]
-    assert len(pushed) == 1
-    assert pushed[0].authentic_status != "DEGRADED"
-    assert "withheld 1 DEGRADED job(s)" in caplog.text
+    assert len(pushed) == 2
+    assert any(j.authentic_status == "DEGRADED" for j in pushed)
+    assert "pushing 1 DEGRADED job(s)" in caplog.text
+    assert "withheld" not in caplog.text
 
     # Both jobs are new and present in the report (DEGRADED included).
     assert result["report"]["new_count"] == 2
@@ -247,3 +252,38 @@ def test_degraded_jobs_withheld_from_push_but_kept_in_new_count(tmp_path, monkey
         jobs = json.load(fh)
     statuses = sorted(j["authentic_status"] for j in jobs)
     assert statuses == ["AUTHENTIC", "DEGRADED"]
+
+
+def test_closed_jobs_still_excluded_from_push(tmp_path, monkeypatch, caplog):
+    """The push policy flip only admits DEGRADED jobs; CLOSED jobs remain
+    excluded from the telegram push list."""
+    caplog.set_level("INFO")
+    telegram = mock.MagicMock()
+    telegram.configured.return_value = True
+    pushed_lists: list[list] = []
+    telegram.notify_new.side_effect = lambda jobs: pushed_lists.append(list(jobs)) or len(jobs)
+    monkeypatch.setattr("jobharness.runner.telegram", telegram)
+
+    def fake_verify(job, check_reachable=True):
+        job.freshness = "fresh"
+        if "Senior Backend Engineer" in job.title:
+            job.authentic_status = "CLOSED"
+        return job
+
+    monkeypatch.setattr("jobharness.runner.verify", fake_verify)
+
+    raws = [
+        _raw("Backend Engineer", "Acme", "Remote", "https://acme.com/j/1"),
+        _raw("Senior Backend Engineer", "Globex", "Austin, TX", "https://globex.com/j/2"),
+    ]
+    _run(
+        tmp_path, monkeypatch, raws,
+        telegram_mock=telegram,
+        verify_reachable=True, push_telegram=True,
+    )
+
+    # Only the non-CLOSED job reaches the push (if it is genuinely new);
+    # CLOSED is never in the pushed list.
+    for pushed in pushed_lists:
+        assert all(j.authentic_status != "CLOSED" for j in pushed)
+

@@ -5,7 +5,7 @@
 **On-demand job harvesting for freshers & early-career engineers — India-focused, source-verified, Telegram-delivered.**
 
 ![Python](https://img.shields.io/badge/Python-3.10%2B-3776AB?logo=python&logoColor=white)
-![Tests](https://img.shields.io/badge/tests-409%20passed-2ea44f)
+![Tests](https://img.shields.io/badge/tests-432%20passed-2ea44f)
 ![CI](https://img.shields.io/github/actions/workflow/status/Inayat-0007/jobharness/ci.yml)
 ![Sources](https://img.shields.io/badge/sources-19%20adapters-8A2BE2)
 ![Browser](https://img.shields.io/badge/browser-Playwright%20%2B%20stealth-45ba4b)
@@ -119,8 +119,10 @@ sequenceDiagram
 
 Key behaviors:
 
-- **Parallelism with safety** — sources fetch on 4 worker threads; browser adapters are serialized by a global lock (one human gate at a time); career-page rendering uses its own parallel headless workers with live progress lines.
-- **LLM budget** — extraction is capped per run (`--llm-budget`, default 200); beyond it, jobs use fast no-LLM extraction from raw fields. Likely matches are prioritized for the budget.
+- **Parallelism with safety** — sources fetch on 4 worker threads; browser adapters are serialized by a global lock (one human gate at a time); career-page rendering uses its own parallel headless workers with live progress lines. Every network stage uses bounded futures (bounded windows + deadline checks) so a runaway stage stops submitting new work instead of hanging the run.
+- **Pre-dedup** — raw postings are collapsed across sources by normalized `title + company + location-bucket` before extraction, so the same posting found via two channels costs one extraction and one alert (`pre-dedup: dropped N collapsed key(s)` logged).
+- **LLM budget** — extraction is capped per run (`--llm-budget`, default 200); beyond it, jobs use fast no-LLM extraction from raw fields. Likely matches are prioritized for the budget. Provider health is tracked per run and printed as `LLM usage: N calls, M ok, K rate-limited`.
+- **Run timeout budget** — `timeout_minutes` in the profile caps the whole run; when exceeded, remaining stages are skipped best-effort and a partial report + manifest is still written (`timeout` + `timeout_aborted_stages` in `manifest.json`).
 - **Source statuses** — every source reports `ok / empty / blocked / rate_limited / auth_required / source_down / parse_failure / no_match`, printed at the end of every run.
 - **Auto-continue gates** — when a portal needs a CAPTCHA or login, the browser opens and the run **polls until you finish** (no console interaction, no ENTER presses, 5–10 min timeout), then continues on its own.
 
@@ -156,16 +158,31 @@ Key behaviors:
 |---|---|---|
 | `identity_score` | 0–1 | Similarity to an already-stored posting (title Jaro-Winkler + company identity + location + description, with title-floor and domain-contradiction gates) |
 | `authenticity_score` | 0–100 | Source authority, employer-domain match, posting ID, HTTP status, validThrough, freshness, completeness, cross-source agreement, minus closed markers |
-| `match_score` | 0–1 | BM25 relevance vs profile: title/description blend + skill overlap + experience + location |
+| `match_score` | 0–1 | **Saturation-capped** BM25 relevance vs profile: title/description blend + skill overlap + experience + location. A job matching ~8 distinct profile query tokens saturates at 1.0 — profile size can no longer dilute scores (calibration fix, 2026-08) |
 
-The **decision engine** maps the three scores to `AUTO_ACCEPT / REVIEW / REJECT`; all thresholds live in `jobharness/scoring/thresholds.py` — never scattered.
+The **decision engine** maps the three scores to `AUTO_ACCEPT / REVIEW / REJECT`:
+
+| Decision | Requires | Meaning |
+|---|---|---|
+| `AUTO_ACCEPT` | `identity ≥ 0.95` **and** `authenticity ≥ 55` **and** `match ≥ 0.30` | Employer-ATS-verified posting with strong profile relevance — alert without review |
+| `REVIEW` | `match ≥ 0.20`, identity/authenticity below AUTO_ACCEPT bars | Worth a human look — still alerted |
+| `REJECT` | hard filters, CLOSED state, or invalid URL | Silent — never stored as new |
+
+All thresholds live in `jobharness/scoring/thresholds.py` — never scattered. The bars were recalibrated 2026-08 after live evidence showed `AUTO_ACCEPT` was structurally unreachable under the old normalization (max observed match 0.230 vs old 0.60 bar); with the saturation cap, employer-ATS jobs realistically reach `auth ≥ 55, match ≥ 0.30` and AUTO_ACCEPT fires.
+
+### Evidence & reasons
+
+- `positive_signals` — active apply URL, fresh/recent posting, employer-ATS source authority, structured posting.
+- `negative_signals` — CLOSED/blocked response, expired `validThrough`, DEGRADED unreachability marker.
+- `compose_reasons` — every job carries a human-readable reason list merging evidence + decision reasons, shown in reports and Telegram cards.
 
 ### Deduplication & state
 
 - `job_id_hash = sha1(normalize(title|company|location))` — primary key; reposts collapse.
 - `canonical_job_id` hierarchy: posting ID → canonical URL → company entity + title → company+title+location → hash.
 - Cross-run blocking keys + fuzzy lookup: **HIGH** merges (no re-alert), **MEDIUM** flags `possible_duplicate_of` + REVIEW, **LOW** follows the normal new path.
-- `jobs.db` (SQLite v3, auto-migrated) prunes CLOSED jobs after 90 days of inactivity; CLOSED jobs are never alerted as new.
+- **In-run fuzzy linkage** — jobs unmatched against committed state are fuzzy-checked against every row stored *earlier in the same run* (mirroring committed-state verdicts), so a title-variant sighting of the same posting within one run merges instead of double-storing / double-alerting.
+- `jobs.db` (SQLite v3, auto-migrated) prunes CLOSED jobs after 90 days of inactivity; CLOSED jobs are never alerted as new. `--since N` drops jobs whose posted date is older than N days (incremental mode).
 
 ---
 
@@ -197,7 +214,7 @@ The **decision engine** maps the three scores to `AUTO_ACCEPT / REVIEW / REJECT`
 | API keys | `.env` only — gitignored, never committed |
 | Portal credentials | **None stored, ever** — manual login, persistent cookies only |
 | Cookies | `cookies/` — gitignored + chmod-restricted |
-| LLM keys | `.env` (DeepSeek / Gemini / GLM / Qwen) |
+| LLM keys | `.env` (NVIDIA / DeepSeek / Gemini / GLM / Qwen / OpenRouter) — with per-provider circuit breaker (3 consecutive 429s → 5-min cooldown) and an ordered fallback chain |
 | Token budget | LLM extraction capped per run (`--llm-budget 200`) |
 | ToS risk | Low-volume personal use; gated sources off by default |
 
@@ -214,7 +231,7 @@ Per run, under `reports/<timestamp>/`:
 | `report.json` | Complete structured data |
 | `report.pdf` | Print-ready **A4 PDF** of the HTML report (headless Chromium) |
 
-**Telegram** (when configured): one message per genuinely-new non-REJECT job — title, company, location, posted date, experience, salary, score, decision, reason, and a clickable **Apply directly** link — plus the PDF report attached (CSV fallback).
+**Telegram** (when configured): one message per genuinely-new non-REJECT job — title, company, location, posted date **with freshness label** (`fresh` ≤1d, `recent` ≤7d, `older` ≤30d, `stale` >30d), experience, salary, score, decision, reason, and a clickable **Apply directly** link — plus the PDF report attached (CSV fallback). **DEGRADED** jobs (verification rate-limited — listing fetch succeeded) are still pushed, with a visible `⚠️ link could not be verified` warning on the card instead of being silently withheld.
 
 **Dashboard** — `python -m jobharness dashboard` builds `reports/dashboard.html`, a single self-contained offline page aggregating all runs: stat cards, decision/source/status bars, live filters, sortable rows, and a detail drawer with every stored field.
 
@@ -252,6 +269,7 @@ python -m jobharness run --source remoteok --top 5 --dry-run --no-llm
 ```
 jobharness run [--profile FILE] [--source NAME ...] [--top N]
                [--llm-budget N] [--no-llm] [--no-verify] [--no-push] [--dry-run]
+               [--since N]
 jobharness dashboard
 ```
 
@@ -261,6 +279,7 @@ jobharness dashboard
 | `--source` | Only run these source names (repeatable) |
 | `--top` | Cap results per source |
 | `--llm-budget` | Cap LLM extraction calls per run (default 200) |
+| `--since N` | Incremental mode: keep only jobs posted within the last N days |
 | `--no-llm` | Skip LLM extraction (raw fields only) |
 | `--no-verify` | Skip apply-URL reachability check |
 | `--no-push` | Skip Telegram push |
@@ -271,19 +290,19 @@ jobharness dashboard
 ## 📝 Profile Configuration
 
 ```yaml
-roles:      [Software Engineer, SDE, Data Engineer, AI Engineer, Intern, Trainee, Apprentice, ...]
-keywords:   [python, sql, react, node.js, java, cloud, aws, api, ml/ai, fresher, ...]
+roles:      [Software Engineer, SDE, Data Engineer, AI Engineer, LLM Engineer, Intern, Trainee, ...]
+keywords:   [python, sql, react, node.js, java, cloud, aws, api, ml/ai, llm, rag, genai, fresher, ...]
 excludes:   [senior, lead, manager, 2+ years, 3-5 years, ...]
 location:   "India"          # strict India-only (any state/city)
 remote:     false            # remote jobs are REJECTED
 sources:    {source_name: true|false}
 greenhouse_boards: [atlassian, zomato, datadog, mongodb, ...]
 career_pages: [{company: Microsoft, url: https://jobs.careers.microsoft.com/...}, ...]
-llm_provider: deepseek        # deepseek | gemini | glm | qwen
+llm_provider: nvidia         # nvidia | deepseek | gemini | glm | qwen | openrouter
 top_n:      50
 ```
 
-The bundled `my-target-live.yaml` targets **2026-passout fresher** (0–1 yr) roles anywhere in India, on-site only, across 46 curated product + service companies (Google, Microsoft, Amazon, Meesho, Fractal, TCS, Infosys, Accenture, Cognizant, Capgemini…) plus the LinkedIn guest API and India Adzuna.
+The bundled `my-target-live.yaml` targets **2026-passout fresher** (0–1 yr) roles anywhere in India, on-site only. It ships **72 role phrases** — core SWE/dev, AI/LLM/GenAI/ML, data-engineering families, plus every entry-level hiring label (fresher, trainee, graduate trainee, new grad/NCG, 2026 batch/passout, apprentice, junior, college grad, early talent, off-campus, campus hire) and the famous underrated Indian fresher titles (Systems Engineer = Infosys, Programmer Analyst = Cognizant, Project Engineer = Wipro, Associate SE) — across 46 curated product + service companies (Google, Microsoft, Amazon, Meesho, Fractal, TCS, Infosys, Accenture, Cognizant, Capgemini…) plus the LinkedIn guest API and India Adzuna. Bare `GET` is deliberately excluded (its regex would match the word "get" in every description).
 
 ---
 
@@ -317,7 +336,7 @@ jobharness/
 python -m pytest tests\ -q
 ```
 
-**397 offline tests** (no network needed): zero-hallucination extraction, adapter parsers (RemoteOK, LinkedIn guest), dedupe + v1→v2→v3 migration + retention pruning, verifier CLOSED/confidence/domain logic, freshness date parsing, JobPosting JSON-LD parser, strict matcher location rules, browser login/CAPTCHA gate polling, report generation + escaping, dashboard builder, full end-to-end pipeline, cross-run fuzzy dedup, identity/posting-ID extraction, evidence signals + source statuses, BM25 matching + decision engine, evaluation metrics.
+**432 offline tests** (no network needed): zero-hallucination extraction, adapter parsers (RemoteOK, LinkedIn guest), dedupe + v1→v2→v3 migration + retention pruning + scoring calibration, verifier CLOSED/confidence/domain logic, freshness date parsing, JobPosting JSON-LD parser, strict matcher location rules, browser login/CAPTCHA gate polling, report generation + escaping, dashboard builder, full end-to-end pipeline, cross-run fuzzy dedup + in-run linkage, identity/posting-ID extraction, evidence signals + source statuses, BM25 matching + decision engine, evaluation metrics.
 
 Tests that need a real browser, the ML extra or live network are marked `browser` / `ml` / `integration` (registered in `pyproject.toml` + `tests/conftest.py`); CI runs the offline suite via `pytest -m "not browser and not ml and not integration"`.
 
@@ -328,15 +347,25 @@ Tests that need a real browser, the ML extra or live network are marked `browser
 1. **"Authentic" ≠ "hiring"** — a reachable apply page proves the posting exists, not that the employer is actively hiring or that you will be shortlisted.
 2. **Portal ToS** — LinkedIn/Glassdoor/Naukri/Hirist scraping risks account bans; gated sources are off by default, and login-gated apply URLs may be marked CLOSED falsely by plain-HTTP verification (documented behavior, lower confidence for those portals).
 3. **Career-page coverage** — Google/Flipkart/TCS/Infosys career pages yield 0–2 jobs each (lazy-loaded beyond page 1 or bot-blocked); the LinkedIn guest API and Greenhouse carry most of the load.
-4. **Score thresholds are untuned heuristics** — `AUTO_ACCEPT/REVIEW` boundaries are starting points; Phase-4 labeled data is required to calibrate them.
+4. **Score thresholds are calibrated heuristics** — `AUTO_ACCEPT/REVIEW` bars were re-tuned 2026-08 from live-run evidence (saturation-capped normalization; employer-ATS jobs now realistically reach AUTO_ACCEPT). They remain provisional until Phase-4 labeled calibration replaces them with probability-backed values.
 5. **Windows-first** — `browser.py` chmod is a no-op on win32; human gates poll the browser (auto-continue) rather than blocking on `input()`.
 6. **Lever API is deprecated** — every board slug returns 404; the adapter is disabled in the production profile (kept for potential API revival).
 7. **CI runs the offline suite only** — ruff, mypy and pytest run in GitHub Actions on every push/PR; tests marked `browser`/`ml`/`integration` need a real browser, the ml extra or live network, so they are excluded from CI.
 8. **Headed browser constraints** — gated portals run on your machine only (human gates cannot run on a server).
+9. **Network dependency** — the harness needs reliable outbound routes to the job sources and LLM endpoints; a transient DNS/TCP outage can degrade extraction and verification for a run (providers recover next run; jobs keep their raw fields).
 
 ---
 
 ## 📜 Changelog — What Was Fixed & Improved
+
+**V4 — calibration, reliability & expanded fresher coverage (current):**
+- **Scoring recalibration** — saturation-capped BM25/skill normalization in `scoring/matching.py`; `AUTO_ACCEPT` was structurally unreachable (max observed match 0.230 vs old 0.60 bar, 0 AUTO_ACCEPT in 4 runs) — now reachable via `identity ≥ 0.95 + auth ≥ 55 + match ≥ 0.30` in `thresholds.py`; live runs now emit `AUTO_ACCEPT` decisions.
+- **LLM provider hardening** — 429 circuit breaker (3 strikes → 5-min cooldown), ordered fallback chain (requested provider → deepseek/nvidia/openrouter/gemini/glm/qwen), per-provider + aggregate usage stats (`LLM usage: N calls, M ok, K rate-limited`), `good` alias for successes.
+- **In-run fuzzy linkage** — jobs unmatched against committed state are fuzzy-checked against same-run stored rows (auto-merge/review mirroring committed verdicts), eliminating same-run duplicate rows and duplicate alerts; capped at 200 tracked rows to bound the scan.
+- **DEGRADED push policy** — jobs whose verify check was rate-limited are no longer silently withheld: they are pushed with a visible `⚠️ link could not be verified` warning on the Telegram card.
+- **Pre-dedup observability** — cross-source collapse count logged (`pre-dedup: dropped N collapsed key(s)`).
+- **Profile expansion** — 72 role phrases / 59 keywords / 31 excludes: AI/LLM/GenAI/ML + data families, 2026 batch/passout, NCG, early talent, off-campus, and underrated Indian fresher titles (Programmer Analyst, Project Engineer, Systems Engineer); `--since N` incremental mode; `llm_provider: nvidia` production default.
+- **Tests:** 397 → 432 (scoring calibration, decision-engine, provider stats, dedupe in-run linkage).
 
 **V3 — speed, reliability & CI (shipped):**
 - **Shipped (V3):** shared pooled `httpx.Client` (`fetcher.get_shared_client`); verify retry (2 retries, exponential backoff) marking transient failures `DEGRADED` instead of false CLOSED; SQLite WAL + 30 s `busy_timeout` + batched commits (`COMMIT_EVERY=50`) + end-of-run `wal_checkpoint`; CLOSED→AUTHENTIC re-alerts (`re_alerted` flag); punctuation-safe hashing (C++ ≠ C#, Node.js ≡ Nodejs); relative date parsing ("2 days ago"); matcher regexes precompiled and cached on the profile; typed source error statuses propagated from gated adapters; logging subsystem (`jobharness/logging.py` — console + rotating file); CLI exit codes (0/1/2); pytest markers `browser`/`ml`/`integration` + shared `tests/conftest.py` fixtures (`tmp_profile`, `clear_env`, `sample_job`); GitHub Actions CI (ruff, mypy, pytest on Python 3.10–3.13).
@@ -359,11 +388,14 @@ Tests that need a real browser, the ML extra or live network are marked `browser
 
 ## 🗺️ Roadmap
 
-- [ ] Phase-4 calibration: labeled dataset → tuned thresholds (`evaluation/benchmark`)
-- [ ] Incremental mode (`--since`) + scheduler wrapper for true automation
-- [ ] Description backfill for pre-v3 rows from stored reports
+- [x] Incremental mode (`--since`) + run timeout budget for automation
+- [x] Description backfill for pre-v3 rows from stored reports
+- [x] Scoring calibration (AUTO_ACCEPT reachable) — pending Phase-4 labeled tuning
+- [ ] Phase-4 calibration: labeled dataset → probability-backed thresholds (`evaluation/benchmark`)
+- [ ] Scheduler wrapper / cron integration for fully automated daily runs
 - [ ] Dashboard polish: CSV export of filtered views, per-run comparison, dark theme
 - [ ] Deep-crawl career pages (pagination, per-site card selectors)
+- [ ] Google for Jobs browser-render fallback (adapter retained, JS-shell disabled)
 
 ---
 

@@ -6,6 +6,7 @@ from jobharness.scoring.thresholds import (
     AUTO_ACCEPT_AUTHENTICITY,
     AUTO_ACCEPT_IDENTITY,
     AUTO_ACCEPT_MATCH,
+    MEDIUM_AUTHENTICITY,
     REJECT,
     REVIEW,
     REVIEW_MATCH,
@@ -41,8 +42,8 @@ def test_auto_accept_no_candidates():
 
 def test_just_below_auto_accept_is_review():
     assert decide(0.94, 95, 0.9, STATE_OPEN)[0] == REVIEW
-    assert decide(1.0, 69, 0.9, STATE_OPEN)[0] == REVIEW
-    assert decide(1.0, 95, 0.59, STATE_OPEN)[0] == REVIEW
+    assert decide(1.0, AUTO_ACCEPT_AUTHENTICITY - 1, 0.9, STATE_OPEN)[0] == REVIEW
+    assert decide(1.0, 95, AUTO_ACCEPT_MATCH - 0.01, STATE_OPEN)[0] == REVIEW
 
 
 def test_review_medium_relevance():
@@ -58,15 +59,15 @@ def test_review_uncertain_identity():
 
 
 def test_review_medium_authenticity():
-    d, reasons = decide(1.0, 55, 0.9, STATE_OPEN)
+    d, reasons = decide(1.0, MEDIUM_AUTHENTICITY + 1, 0.9, STATE_OPEN)
     assert d == REVIEW
     assert "authenticity medium" in reasons
 
 
 def test_low_relevance_rejects_even_high_scores():
-    assert decide(1.0, 95, 0.39, STATE_OPEN)[0] == REJECT
+    assert decide(1.0, 95, REVIEW_MATCH - 0.01, STATE_OPEN)[0] == REJECT
 
 
 def test_reject_when_below_all_thresholds():
     assert decide(0.0, 20, 0.1, STATE_OPEN)[0] == REJECT
-    assert decide(0.5, 30, 0.2, STATE_OPEN)[0] == REJECT
+    assert decide(0.5, 30, REVIEW_MATCH - 0.01, STATE_OPEN)[0] == REJECT

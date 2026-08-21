@@ -44,6 +44,14 @@ from .sources.exceptions import (
 from .urlutil import canonicalize_url
 from .verify import DEGRADED, verify
 
+# Optional LLM call observability: stats() is added to llm.provider by a
+# parallel change; import defensively so older providers still work.
+_llm_stats: Callable[[], dict[str, dict[str, int]]] | None
+try:
+    from .llm.provider import stats as _llm_stats
+except (ImportError, AttributeError):  # pragma: no cover - provider without stats
+    _llm_stats = None
+
 # Safety cap: never make more than this many LLM extraction calls per run.
 DEFAULT_LLM_BUDGET = 200
 
@@ -261,13 +269,23 @@ def run_once(
     # two sources in the same city collapses to one LLM extraction and one
     # alert, while same title+company in different cities survive.
     seen_keys = set()
+    collapsed_keys = set()
     unique_raws: list[RawJob] = []
     for raw in raw_jobs:
         key = _pre_dedup_key(raw)
         if key in seen_keys:
+            # Count each collapsing key once (a single-key group of size >1
+            # counts as one dropped key, regardless of group size).
+            collapsed_keys.add(key)
             continue
         seen_keys.add(key)
         unique_raws.append(raw)
+    if collapsed_keys:
+        logger.info(
+            "pre-dedup: dropped %d collapsed key(s) "
+            "(same title+company+location from multiple sources)",
+            len(collapsed_keys),
+        )
 
     # Incremental mode: --since N days drops jobs whose posted_date is older.
     # Unparseable dates are kept (cannot prove staleness; default behavior).
@@ -313,6 +331,11 @@ def run_once(
                 logger.error("%s", msg)
             return None
         if not job.title or job.title == MISSING:
+            logger.info(
+                "extraction dropped empty-title job (source=%s, company=%s)",
+                raw.source_name,
+                raw.company or "",
+            )
             return None
         try:
             if not matches_profile(job, profile):
@@ -565,14 +588,14 @@ def run_once(
         rep["pdf"] = write_pdf(str(rep["html"]), f"{rep['dir']}/report.pdf")
     stage_elapsed["report"] = time.monotonic() - t0
 
-    # Telegram push (genuinely new + authentic + accepted decision only).
-    # DEGRADED jobs (verification could not confirm reachability after
-    # retries) stay in the reports - where the verification_unreachable
-    # negative signal is visible - but are withheld from the push: an
-    # unverifiable apply URL makes the card low-value (the link may be dead
-    # or transiently down). They still count in new_count (they ARE new;
-    # only the push is filtered), so manifest and reports stay consistent
-    # with the jobs that were actually stored.
+    # Telegram push (genuinely new + not-CLOSED + accepted decision).
+    # DEGRADED jobs (verification could not confirm reachability - e.g. the
+    # source rate-limited the verify check while the listing fetch itself
+    # succeeded, so the job is genuinely real) ARE pushed: the card carries a
+    # visible "link could not be verified" warning (telegram._card_text)
+    # instead of the job being silently withheld. CLOSED jobs remain
+    # excluded. All pushed jobs still count in new_count, so manifest and
+    # reports stay consistent with the jobs that were actually stored.
     t0 = time.monotonic()
     pushed = 0
     if push_telegram and _deadline_passed():
@@ -584,20 +607,15 @@ def run_once(
                 j
                 for j in matched
                 if j.genuinely_new
-                and j.authentic_status not in (CLOSED, DEGRADED)
+                and j.authentic_status != CLOSED
                 and j.decision not in ("", "REJECT")
             ]
-            withheld_degraded = sum(
-                1
-                for j in matched
-                if j.genuinely_new
-                and j.authentic_status == DEGRADED
-                and j.decision not in ("", "REJECT")
-            )
-            if withheld_degraded:
+            degraded_pushed = sum(1 for j in push_jobs if j.authentic_status == DEGRADED)
+            if degraded_pushed:
                 logger.info(
-                    "withheld %d DEGRADED job(s) from telegram push (apply URL could not be verified)",
-                    withheld_degraded,
+                    "pushing %d DEGRADED job(s) with unverified-link warning "
+                    "(listing fetch succeeded; verify rate-limited)",
+                    degraded_pushed,
                 )
             pushed = telegram.notify_new(push_jobs)
             attachment = str(rep.get("pdf") or rep["csv"])
@@ -651,6 +669,17 @@ def run_once(
         len(errors),
     )
     logger.info("decisions: %s", decisions)
+    if _llm_stats is not None:
+        try:
+            _s = _llm_stats() or {}
+            logger.info(
+                "LLM usage: %s calls, %s ok, %s rate-limited",
+                _s.get("attempts", 0),
+                _s.get("good", 0),
+                _s.get("rate_limited", 0),
+            )
+        except Exception:  # pragma: no cover - best-effort observability only
+            pass
     logger.info(
         "source statuses: %s",
         ", ".join(f"{n}={s.value}" for n, s in source_statuses.items()),

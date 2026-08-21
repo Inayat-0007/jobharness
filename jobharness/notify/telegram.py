@@ -73,6 +73,9 @@ def _card_text(job: Job) -> str:
     reasons = getattr(job, "reason", []) or []
     if reasons:
         text += f"Reason: {_html.escape(str(reasons[0]))}\n"
+    if getattr(job, "authentic_status", "") == "DEGRADED":
+        # Static literal (no user-controlled data) - no escaping needed.
+        text += "⚠️ link could not be verified (source rate-limited)\n"
     text += f'<a href="{_html.escape(job.apply_url_direct or "", quote=True)}">Apply directly</a>'
     return text
 
@@ -155,7 +158,9 @@ def _send_batch(jobs: list[Job]) -> int:
 
 def notify_new(jobs: list[Job]) -> int:
     """Push genuinely-new, not-CLOSED jobs that are not hard REJECTs
-    (AUTO_ACCEPT + REVIEW). Fuzzy-merged (HIGH) and REJECT jobs never alert."""
+    (AUTO_ACCEPT + REVIEW). DEGRADED jobs pass through (their card carries a
+    visible unverified-link warning); CLOSED and REJECT jobs never alert.
+    Fuzzy-merged (HIGH) jobs are not genuinely_new and never alert either."""
     sent = 0
     batch: list[Job] = []
     for j in jobs:

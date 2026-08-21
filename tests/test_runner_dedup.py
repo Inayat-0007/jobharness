@@ -32,10 +32,12 @@ def _same_job_two_sources():
     ]
 
 
-def test_pre_dedup_collapses_same_job_across_sources(tmp_path, monkeypatch):
+def test_pre_dedup_collapses_same_job_across_sources(tmp_path, monkeypatch, caplog):
     """The same job via two sources must be extracted once (by title+company),
     not twice; the cross-source pre-dedup must NOT include source_name in the key.
+    The collapse is surfaced at INFO so silent pre-dedup drops are observable.
     """
+    caplog.set_level("INFO")
     calls = {"n": 0}
     original_extract = runner.extract
 
@@ -61,6 +63,8 @@ def test_pre_dedup_collapses_same_job_across_sources(tmp_path, monkeypatch):
     assert result["total_raw"] == 2
     assert calls["n"] == 1
     assert result["total_matched"] == 1
+    # The collapse is logged (a single key group of size >1 counts once).
+    assert "pre-dedup: dropped 1 collapsed key(s)" in caplog.text
 
 
 def _write_profile2(tmp_path):

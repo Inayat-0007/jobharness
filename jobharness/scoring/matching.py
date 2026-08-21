@@ -25,6 +25,18 @@ def skill_normalize(term) -> str:
     return SKILL_SYNONYMS.get(t, t)
 
 
+# Saturation caps for coverage normalization (calibration fix, 2026-08).
+# The raw query term/keyword counts grow with the profile size (e.g. 33 roles
+# + 47 keywords = 74 unique query tokens), so dividing the BM25 sum or the
+# matched-keyword count by the FULL profile size made strong scores
+# unreachable: a perfect title match scored ~0.06-0.15 and no job ever passed
+# AUTO_ACCEPT_MATCH (observed max match_score 0.230 over 183+ matched jobs).
+# Instead we treat a job matching ~8 distinct query tokens (or ~8 profile
+# keywords) as a saturated match and cap the denominator there.
+BM25_SATURATION_TERMS = 8
+SKILL_SATURATION_K = 8
+
+
 def _tokens(text) -> list[str]:
     return algo.normalize_text(text).split()
 
@@ -45,17 +57,24 @@ def _query_terms(profile) -> list[str]:
 
 
 def bm25_coverage(query_terms: list[str], doc_terms: list[str]) -> float:
-    """Bounded BM25 query coverage in [0,1]: ~fraction of query terms present
-    in the document (TF-weighted, length-normalized)."""
+    """Bounded BM25 query coverage in [0,1]: per-term BM25 sum normalized by
+    min(len(query_terms), BM25_SATURATION_TERMS), so a document matching
+    ~BM25_SATURATION_TERMS distinct query tokens saturates at 1.0 regardless
+    of how large the profile's full token set is. Per-term BM25 math
+    (TF weighting, length normalization) is unchanged."""
     if not query_terms or not doc_terms:
         return 0.0
     s = algo.bm25_score(query_terms, doc_terms)
-    return min(1.0, s / len(query_terms))
+    denom = max(1, min(len(query_terms), BM25_SATURATION_TERMS))
+    return min(1.0, s / denom)
 
 
 def skill_overlap(job, profile) -> float:
-    """Fraction of the profile's wanted skills found in the job's keywords,
-    title, and description. Neutral (0.5) when the profile lists no keywords."""
+    """Fraction of wanted skills found in the job's keywords, title, and
+    description, normalized by min(len(want), SKILL_SATURATION_K) so a large
+    production keyword list does not dilute the score: matching
+    SKILL_SATURATION_K or more keywords saturates at 1.0. Neutral (0.5) when
+    the profile lists no keywords."""
     want = {skill_normalize(t) for t in (getattr(profile, "keywords", []) or [])}
     want = {w for w in want if w}
     if not want:
@@ -64,7 +83,8 @@ def skill_overlap(job, profile) -> float:
     have |= {skill_normalize(t) for t in _tokens(f"{getattr(job, 'title', '')} {getattr(job, 'description', '')}")}
     if not have:
         return 0.0
-    return len(have & want) / len(want)
+    denom = min(len(want), SKILL_SATURATION_K)
+    return min(1.0, len(have & want) / denom)
 
 
 def experience_compat(job, profile) -> float:

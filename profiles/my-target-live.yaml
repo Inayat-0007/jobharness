@@ -17,41 +17,90 @@ name: my-target-live
 enrich_cap: 20
 
 # 1) TITLES you want. Job matches if ANY appears in title/role/description.
-# Every hiring label for 0-1 yr / fresher / new grad / intern / apprentice.
+# Coverage: core SWE/dev, AI/LLM/GenAI/ML, data — plus every 0-1 yr hiring
+# label: trainee/graduate-trainee, new grad/NCG, 2026 batch/passout, apprentice,
+# junior, college grad, early talent, off-campus drives, campus hire, and the
+# famous underrated Indian fresher titles (Systems Engineer = Infosys,
+# Programmer Analyst = Cognizant, Project Engineer = Wipro, Associate SE).
+# Deliberately NOT added: bare "GET" (regex would match the word "get" in
+# every description), bare "AI"/"ML"/"Analyst"/"Associate" (too noisy).
 roles:
+  # --- core software ---
   - Software Engineer
   - Software Development Engineer
+  - Software Engineer I
   - SDE
+  - SDE-1
   - Software Developer
+  - Associate Software Engineer
+  - Associate Engineer
+  - Associate Developer
+  - Junior Software Engineer
+  - Junior Engineer
+  - Junior Developer
   - Backend Engineer
   - Frontend Engineer
   - Full Stack
-  - Data Engineer
+  - Web Developer
+  - Application Developer
+  - DevOps
+  # --- AI / LLM / GenAI / ML ---
   - AI Engineer
+  - AI/ML Engineer
+  - AI Developer
+  - Generative AI Engineer
+  - GenAI Engineer
+  - LLM Engineer
   - Machine Learning Engineer
+  - ML Engineer
+  - Applied AI
+  - MLOps
+  - NLP Engineer
+  # --- data ---
+  - Data Engineer
+  - Big Data Engineer
+  - Data Platform Engineer
+  - Analytics Engineer
+  - ETL Developer
+  - Database Engineer
   - Data Scientist
-  - Python Developer
-  - Engineer
+  - Data Analyst
+  - Graduate Analyst
+  # --- fresher hiring labels ---
+  - Fresher
   - Trainee
+  - Trainee Engineer
+  - Software Trainee
   - Graduate Trainee
   - Graduate Engineer
+  - Graduate Engineer Trainee
+  - Programmer Analyst
+  - Project Engineer
+  - Systems Engineer
+  - Python Developer
+  - Engineer
+  - Developer
   - Intern
   - Internship
   - Apprentice
   - New Grad
   - New Graduate
+  - New College Grad
+  - NCG
+  - College Grad
+  - College Graduate
+  - University Graduate
+  - 2026 Graduate
+  - 2026 Batch
+  - 2026 Passout
+  - Batch of 2026
+  - Class of 2026
   - Early Career
+  - Early Talent
   - Entry Level
-  - Fresher
+  - Off Campus
   - Campus
   - Campus Hire
-  - Associate Software Engineer
-  - Associate Engineer
-  - Junior Software Engineer
-  - Junior Engineer
-  - Systems Engineer
-  - DevOps
-  - Developer
 
 # 2) TECH you know (from resume). Job matches if ANY keyword appears.
 # Core: python, sql, react, node.js, javascript, docker, git, ai/ml, cloud.
@@ -98,13 +147,25 @@ keywords:
   - spring
   - django
   - flask
+  - langchain
+  - openai
+  - chatbot
+  - vector database
+  - generative ai
+  - artificial intelligence
   - fresher
   - 0-1 year
+  - 0-2 years
   - apprentice
   - new grad
   - early career
   - entry level
   - graduate
+  - passout
+  - walk-in
+  - walkin
+  - off campus
+  - immediate joiner
 
 # 3) REJECT list — FRESHER ONLY (0-1 yr). Any senior/mid-level or experience
 #    signal of 2+ years (or ranges starting at 2+) is skipped. "1+ year" is
@@ -156,15 +217,14 @@ salary_floor: null
 
 # 8) Companies (product-based + service-based, India presence)
 # Greenhouse official API boards (no login required)
+# Stale slugs (atlassian, zomato, hasura, chargebee, clevertap) removed:
+# all 404 in 3 consecutive runs (boards moved off Greenhouse).
+# careem verified live (200) via boards-api before adding.
 greenhouse_boards:
-  - atlassian
-  - zomato
-  - datadog
   - mongodb
+  - datadog
   - hackerrank
-  - hasura
-  - chargebee
-  - clevertap
+  - careem
 
 # Lever official API is deprecated (all boards return 404) - disabled.
 lever_boards: []
@@ -278,7 +338,7 @@ sources:
   career_page_generic: false
   career_page_browser: true
   adzuna: true
-  google_jobs: true
+  google_jobs: false  # disabled: Google serves JS shell to HTTP clients (blocked every run); adapter retained for browser-render fallback later
   usajobs: false
   linkedin: false
   linkedin_guest: true
@@ -289,6 +349,6 @@ sources:
   hirist: false
   wellfound: false
 
-llm_provider: deepseek
+llm_provider: nvidia
 adzuna_country: in
 top_n: 50

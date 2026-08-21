@@ -149,6 +149,52 @@ def test_send_card_failure_increments_failed_stats(monkeypatch, capsys):
     assert telegram.push_stats["sent"] == 0
 
 
+def test_card_text_includes_degraded_warning_before_apply_link():
+    job = _job_with_specials()
+    job.authentic_status = "DEGRADED"
+    text = telegram._card_text(job)
+    warning = "⚠️ link could not be verified (source rate-limited)"
+    assert warning in text
+    # Warning appears before the apply link anchor.
+    assert text.index(warning) < text.index("Apply directly")
+
+
+def test_card_text_has_no_warning_for_authentic_job():
+    job = _job_with_specials()
+    assert job.authentic_status == VALID_AUTHENTIC
+    text = telegram._card_text(job)
+    assert "could not be verified" not in text
+
+
+def test_notify_new_passes_degraded_through_but_excludes_closed_and_reject(monkeypatch):
+    """telegram.notify_new uses its own defensive filter: DEGRADED passes
+    (the card carries the warning), CLOSED and REJECT jobs never alert."""
+    monkeypatch.setattr(
+        telegram.secrets,
+        "get",
+        lambda k, default="": {"TELEGRAM_BOT_TOKEN": "tok", "TELEGRAM_CHAT_ID": "chat"}.get(k, default),
+    )
+    monkeypatch.setattr(telegram.time, "sleep", lambda *a: None)
+
+    degraded = _job_with_specials()
+    degraded.authentic_status = "DEGRADED"
+    degraded.decision = "REVIEW"
+    closed = _job_with_specials()
+    closed.authentic_status = "CLOSED"
+    closed.decision = "AUTO_ACCEPT"
+    rejected = _job_with_specials()
+    rejected.decision = "REJECT"
+
+    sent_jobs = []
+    with mock.patch(
+        "jobharness.notify.telegram.send_card",
+        side_effect=lambda j: sent_jobs.append(j) or True,
+    ):
+        n = telegram.notify_new([degraded, closed, rejected])
+    assert n == 1
+    assert [j.authentic_status for j in sent_jobs] == ["DEGRADED"]
+
+
 def test_notify_new_skips_low_confidence():
     job = _job_with_specials()
     job.confidence_score = 30

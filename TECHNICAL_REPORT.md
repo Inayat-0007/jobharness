@@ -215,10 +215,10 @@ Unchanged (13 adapters in 4 tiers): Tier 1 API/RSS (remoteok, weworkremotely, re
 - **`authenticity_features(job)`** — the 9-feature vector consumed by verify and (Phase-4 gated) logistic regression.
 
 ### `scoring/matching.py` — relevance
-`score_match = 0.60·(0.60·BM25(title) + 0.40·BM25(desc)) + 0.20·skill_overlap + 0.10·experience + 0.10·location`, all components 0-1. `skill_normalize` synonym map (py→python, node→nodejs, k8s→kubernetes, c++→cpp…). Hard matcher rules run first and cannot be overridden.
+`score_match = 0.60·(0.60·BM25(title) + 0.40·BM25(desc)) + 0.20·skill_overlap + 0.10·experience + 0.10·location`, all components 0-1. `skill_normalize` synonym map (py→python, node→nodejs, k8s→kubernetes, c++→cpp…). Hard matcher rules run first and cannot be overridden. **Calibration fix (2026-08):** BM25 coverage and skill overlap are saturation-capped (`BM25_SATURATION_TERMS = 8`, `SKILL_SATURATION_K = 8`) — a job matching ~8 distinct profile query tokens saturates at 1.0, so growing the profile (72 roles / 59 keywords) can no longer dilute scores. Under the old full-size normalization the maximum observed match_score over 183+ matched jobs was 0.230 (vs the old AUTO_ACCEPT bar 0.60) — structurally unreachable; with the caps, employer-ATS jobs realistically reach 0.30-0.55+.
 
-### `scoring/decision.py` + `thresholds.py` — centralized thresholds
-`AUTO_ACCEPT_IDENTITY=0.95` (or no-candidates/0.0 = "no known duplicates"), `AUTO_ACCEPT_AUTHENTICITY=70`, `AUTO_ACCEPT_MATCH=0.60`, `REVIEW_MATCH=0.40`, medium-authenticity 40, uncertain-identity floor 0.60. `decide(identity, authenticity, match, state)`: CLOSED/excluded/invalid-URL → `REJECT`; all three high → `AUTO_ACCEPT`; medium relevance OR uncertain identity OR medium authenticity → `REVIEW`; else `REJECT`. Decision reasons are appended to the job's reason list.
+### `scoring/decision.py` + `thresholds.py` — centralized thresholds (recalibrated 2026-08)
+`AUTO_ACCEPT_IDENTITY=0.95`, `AUTO_ACCEPT_AUTHENTICITY=55`, `AUTO_ACCEPT_MATCH=0.30`, `REVIEW_MATCH=0.20`, medium-authenticity 40, uncertain-identity floor 0.60. `decide(identity, authenticity, match, state)`: CLOSED/excluded/invalid-URL → `REJECT`; all three high → `AUTO_ACCEPT`; medium relevance OR uncertain identity OR medium authenticity → `REVIEW`; else `REJECT`. Decision reasons are appended to the job's reason list. The bars are reachable-but-meaningful: AUTO_ACCEPT requires an employer-domain/ATS job (auth ≥ 55 is above the portal ceiling ~43-48) with multi-token relevance (match ≥ 0.30); live runs now emit AUTO_ACCEPT (e.g. 6-8 per run in production). PROVISIONAL pending Phase-4 labeled calibration.
 
 ---
 
@@ -230,7 +230,7 @@ Unchanged (13 adapters in 4 tiers): Tier 1 API/RSS (remoteok, weworkremotely, re
 
 **Live run (2026-08-21 04:20, `reports/20260821-042027/`):** remoteok fetched 100 raw, 1 matched ("Senior Software Engineer Case Execution" @ Pivotal Health) — `decision=REVIEW`, `identity_score=1.0` (exact duplicate of a stored row, `matched_via=exact`), `authenticity_score=42`, `match_score=0.57`, reasons `[application is active, recently posted, relevance medium, authenticity medium]`. **0 genuinely new** — cross-run dedup correctly suppressed the repeat.
 
-**Telegram** (`notify/telegram.py`): HTML parse mode with escaping on all fields; card now shows **Decision + top reason**; **push gate = `decision == AUTO_ACCEPT` AND `genuinely_new` AND not CLOSED** (was `confidence_score >= 50`). Fuzzy-merged (HIGH) and REVIEW jobs never alert — conservative by design. CSV attachment still sent every run.
+**Telegram** (`notify/telegram.py`): HTML parse mode with escaping on all fields; card shows **Posted date + freshness label, Decision + top reason**, and a clickable **Apply directly** link (inline keyboard button when `apply_url_direct` present). **Push gate = `genuinely_new` AND not CLOSED AND `decision not in ("", "REJECT")`** — AUTO_ACCEPT + REVIEW alert (was AUTO_ACCEPT-only in v3). **DEGRADED jobs are pushed** with a visible `⚠️ link could not be verified (source rate-limited)` warning instead of being silently withheld; the run logs `pushing N DEGRADED job(s) with unverified-link warning`. PDF attachment sent every run (CSV fallback).
 
 ---
 
@@ -245,23 +245,25 @@ Unchanged (13 adapters in 4 tiers): Tier 1 API/RSS (remoteok, weworkremotely, re
 
 ---
 
-## 13. TEST SUITE — `170 passed in ~2.7s`
+## 13. TEST SUITE — `432 passed in ~31s`
 
-Coverage map (28 files; 4 tests added in the dashboard commit, 91 in the scoring upgrade):
+Coverage map (54 files; calibration + provider-stats + in-run-linkage tests added in V4):
 
 | Area | Files |
 |---|---|
 | Dashboard (cross-run dedup by hash, stats, HTML build, HTML-stripping of descriptions) | `test_dashboard` |
 | Algorithms (JW edge cases, composite verdicts, company rule table, blocking keys, BM25, features, fingerprint) | `test_algo` |
 | URL canonicalization (utm/tracking strip, idempotence, domain) | `test_urlutil` |
-| Dedupe v3 (v2→v3 migration, v1 rebuild, upsert new columns, fuzzy HIGH/MEDIUM/LOW, merge) | `test_dedupe_v3` |
+| Dedupe v3 (v2→v3 migration, v1 rebuild, upsert new columns, fuzzy HIGH/MEDIUM/LOW, merge, in-run linkage) | `test_dedupe_v3` |
 | Identity (posting IDs per source, company aliases, location buckets, title) | `test_identity` |
 | Evidence (signals, reasons, source authority, authenticity score range, status enum) | `test_evidence` |
 | Source statuses (classify_response, runner mapping incl. typed exceptions, empty, no_match) | `test_source_status` |
-| Matching (BM25 ranking, synonyms, exclusion override, location/seniority) | `test_matching` |
-| Decision matrix (boundaries, hard states, no-candidates auto-accept) | `test_decision` |
+| Matching (BM25 ranking + saturation caps, synonyms, exclusion override, location/seniority) | `test_matching` |
+| Decision matrix (boundaries, hard states, no-candidates auto-accept, recalibrated thresholds) | `test_decision`, `test_scoring_calibration` |
+| LLM provider (provider stats, fallback chain, `good` alias, extraction schema) | `test_llm_provider` |
+| Runner (dedup, manifest stages/timing, E2E pipeline, LLM-stats line, pre-dedup collapse) | `test_runner_*` |
 | Evaluation (dataset counts/round-trip, metrics, calibration, Fellegi-Sunter) | `test_evaluation` |
-| Original 75 (extraction, freshness, matcher, verify, dedupe, runner E2E, adapters, JSON-LD, reports, telegram) | 18 files |
+| Original 75+ (extraction, freshness, matcher, verify, dedupe, adapters, JSON-LD, reports, telegram HTML) | 40+ files |
 
 All offline — network mocked or fixture-driven.
 
@@ -277,26 +279,52 @@ All offline — network mocked or fixture-driven.
 - Additive architecture: zero hard deps added; all 75 legacy tests untouched and green.
 
 **Risks / gaps (honest)**
-1. **Thresholds are untuned heuristics** — TITLE_FLOOR/HIGH/REVIEW and the decision thresholds are starting points; Phase 4 labeled data + benchmark must validate/tune them before they're trusted at scale.
-2. **Fuzzy merge needs descriptions** — cross-run HIGH merges rely on stored `description`; pre-v3 rows (NULL description) fall back to neutral desc similarity → conservative REVIEW instead of merge (safe, but re-alerts possible for title-rewritten repeats).
+1. **Thresholds are calibrated-but-provisional heuristics** — recalibrated 2026-08 from live-run evidence (saturation caps; AUTO_ACCEPT reachable); Phase 4 labeled data + benchmark must validate/tune them before they're trusted at scale.
+2. **Fuzzy merge needs descriptions** — cross-run HIGH merges rely on stored `description`; pre-v3 rows are backfilled from `reports/*/report.json` on store open, but genuinely missing descriptions fall back to neutral desc similarity → conservative REVIEW instead of merge (safe, but re-alerts possible for title-rewritten repeats).
 3. **Backend vs Frontend discrimination** — Jaro-Winkler alone scores them 0.79 (above the 0.75 title floor); separation relies on description similarity, so identical boilerplate descriptions across genuinely different roles remain a boundary risk to validate with the labeled dataset.
-4. **Fewer Telegram alerts** — REVIEW-heavy aggregator jobs (authority 2 → authenticity ~40s) rarely reach AUTO_ACCEPT; intentional, but users should expect quieter push.
+4. **`Engineer II`-style level labels** — "Engineer II"/"Developer II" titles are not auto-excluded (only "2+ years"-style experience text is), so some mid-level postings can match; intentional trade-off to not miss title-rewritten fresher tracks.
 5. **`my-target.yaml` / `.kilo/` untracked** — intentional; keep them out of commits.
-6. **Windows-only note** — `browser.py` chmod is a no-op on win32; CAPTCHA gate blocks the CLI thread on `input()` (expected for the headed workflow).
-7. **No lint/typecheck config** — no ruff/mypy in `pyproject.toml`; only pytest (plan: add only if requested).
+6. **Windows-only note** — `browser.py` chmod is a no-op on win32; human gates poll the browser (auto-continue) rather than blocking on `input()`.
+7. **Network dependency** — transient DNS/TCP outages (observed 2026-08-22: NVIDIA/DeepSeek routes unreachable) degrade LLM extraction and verification for a run; jobs keep raw fields, providers recover next run, and the run's LLM budget can be lowered (`--llm-budget N`) to stay fast while routes are down.
 8. **All keys empty in `.env`** — LLM extraction + Telegram push dormant until secrets are configured.
 
 **Suggested next steps**
 - Collect an independently labeled duplicate dataset from real reports; extend `evaluation/dataset.py`; run `python -m jobharness.evaluation.benchmark` to tune thresholds.
-- Consider filling `description` backfill for pre-v3 rows from `reports/*/report.json` on migration.
-- Add ruff/mypy to the `dev` extra.
-- Populate/remove `RawJob.raw_html`; surface LLM extraction warnings.
-- `--since`/incremental mode + scheduler wrapper for true automation.
+- Scheduler wrapper (cron/Task Scheduler) for fully automated daily runs with `--since` incremental mode.
 - Dashboard polish: export filtered view to CSV, per-run comparison chart, light/dark theme toggle.
+- Google for Jobs browser-render fallback (adapter retained; JS-shell blocks plain-HTTP fetching).
+- Deep-crawl career pages (pagination, per-site card selectors).
 
 ---
 
-*Report compiled from live repository state, full source read, DB inspection (v3 migration verified on a copy), a fresh `pytest` run (170 passed), and a live harvest run (remoteok, 100 raw → 1 matched, 0 new). All facts verified as of 2026-08-21 04:48 IST.*
+*Report compiled from live repository state, full source read, DB inspection, a fresh `pytest` run (432 passed), and live harvest runs (2026-08-22: 03:12 run 507 raw → 4 pushed; 04:12 run 1437 raw → 7 pushed, all Telegram 200 OK). All facts verified as of 2026-08-22 04:45 IST.*
+
+---
+
+## Changelog — V4 calibration & reliability (2026-08-22)
+
+**Scoring & decisions**
+- Saturation-capped BM25 coverage + skill overlap (`scoring/matching.py`) — profile size can no longer dilute scores; AUTO_ACCEPT went from structurally unreachable (0 in 4 runs, max match 0.230) to firing 6-8× per production run.
+- Thresholds recalibrated in `scoring/thresholds.py`: `AUTO_ACCEPT` = identity ≥ 0.95 + auth ≥ 55 + match ≥ 0.30; `REVIEW_MATCH` 0.20. Confidence weights centralized (completeness 48, fresh 24, recent 16, older 4, stale −10, ATS boost 10, expired −20, cap 80, domain-match boost 25/cap 55, blocked cap 40).
+- Evidence reasons merged with decision reasons in `compose_reasons`; decision reasons appended per job.
+
+**LLM provider (`llm/provider.py`)**
+- 429 circuit breaker: 3 consecutive 429s → 5-min cooldown, thread-safe, expired entries reset.
+- Ordered fallback chain: requested provider first, then deepseek/nvidia/openrouter/gemini/glm/qwen.
+- Per-provider + aggregate `stats()` with a `good` alias for successes; runner logs `LLM usage: N calls, M ok, K rate-limited` (key-mismatch fix: runner reads `good`, provider reports `successes` aliased).
+
+**Dedupe & runner (`runner.py`, `dedupe.py`)**
+- In-run fuzzy linkage: same-run duplicate sighting (title variant → different hash) now auto-merges/reviews against rows stored earlier in the same run — no double rows, no double alerts; capped at 200 tracked rows.
+- Pre-dedup collapse observability: `pre-dedup: dropped N collapsed key(s)`.
+- Run timeout budget (`timeout_minutes`): bounded-map futures per stage, deadline-checked; partial report + manifest still written on timeout (`timeout_aborted_stages`).
+- DEGRADED push policy: rate-limited-verify jobs are pushed with a `⚠️ link could not be verified` warning card.
+- `--since N` incremental mode (posted-date cutoff); description backfill for pre-v3 rows from stored reports; SQLite WAL + busy_timeout + batched commits.
+
+**Profile (`my-target-live.yaml`)**
+- 72 role phrases / 59 keywords / 31 excludes: AI/LLM/GenAI/ML + data families, 2026 batch/passout, NCG, early talent, off-campus, underrated Indian fresher titles (Programmer Analyst, Project Engineer, Systems Engineer); `llm_provider: nvidia`; bare `GET`/`AI`/`ML` deliberately excluded (regex noise).
+
+**Verification (live runs 2026-08-22)**
+- 03:12 run: 507 raw → 49 matched → 4 pushed, AUTO_ACCEPT 6; 04:12 run (fast budget): 1437 raw → 53 matched → 7 pushed, AUTO_ACCEPT 8; freshness 49 fresh/1 older/1 stale; apply links 53/53; DEGRADED cards delivered with warning.
 
 ---
 
