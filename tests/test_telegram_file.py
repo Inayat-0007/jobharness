@@ -2,12 +2,23 @@ from __future__ import annotations
 
 from unittest import mock
 
+import pytest
+
 from jobharness.notify import telegram
+
+
+@pytest.fixture(autouse=True)
+def _reset_telegram_state():
+    telegram._client = None
+    telegram._file_client = None
+    telegram.push_stats.update(sent=0, failed=0)
+    yield
 
 
 class FakeResp:
     def __init__(self, status=200):
         self.status_code = status
+        self.headers = {}
 
 
 class FakeCtx:

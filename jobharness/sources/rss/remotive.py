@@ -23,6 +23,7 @@ class RemotiveAdapter(SourceAdapter):
     name = "remotive"
 
     def fetch(self, profile: Profile) -> list[RawJob]:
+        # Remotive exposes a single feed - no pagination to drive by profile.max_pages.
         url = "https://remotive.com/remote-jobs/feed"
         out: list[RawJob] = []
         with make_client() as client:

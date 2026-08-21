@@ -142,3 +142,30 @@ def test_fuzzy_merge_medium_path(tmp_path, monkeypatch):
     assert job["decision"] == "REVIEW"
     assert job["possible_duplicate_of"]
     assert job["identity_score"] > 0.5
+
+
+def test_same_run_fuzzy_merge_cross_source(tmp_path, monkeypatch):
+    """Two sources sight the same job with slightly different titles in ONE
+    run: the in-run linkage must fold the second sighting into the first
+    (single stored row, single new count) instead of storing a duplicate."""
+    import sqlite3 as _sqlite3
+
+    raws = [
+        make_job_for_runner(
+            "Backend Engineer", "Acme", "Remote", "https://acme.com/j/1", source="remoteok"
+        ),
+        make_job_for_runner(
+            "Backend Engineer - India",
+            "Acme",
+            "Remote",
+            "https://acme.com/j/2",
+            source="weworkremotely",
+        ),
+    ]
+    r1 = _run_one(tmp_path, raws, monkeypatch)
+    assert r1["total_raw"] == 2
+    assert r1["total_matched"] == 2
+    assert r1["report"]["new_count"] == 1
+    with _sqlite3.connect(str(tmp_path / "jobs.db")) as conn:
+        rows = conn.execute("SELECT title FROM jobs").fetchall()
+    assert len(rows) == 1

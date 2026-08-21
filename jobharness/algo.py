@@ -1,7 +1,6 @@
 from __future__ import annotations
 
 import hashlib
-import importlib.util
 import math
 import re
 import time as _time
@@ -9,7 +8,13 @@ from urllib.parse import urlsplit
 
 # Optional accelerator probe: rapidfuzz is NOT a hard dependency. When absent
 # (the common case) every algorithm below is pure Python and behavior-identical.
-_HAS_RAPIDFUZZ = importlib.util.find_spec("rapidfuzz") is not None
+try:
+    from rapidfuzz import fuzz as _fuzz
+
+    _HAS_RAPIDFUZZ = True
+except ImportError:
+    _fuzz = None
+    _HAS_RAPIDFUZZ = False
 
 # Centralized thresholds. Never scatter these numbers in runner/verify/matcher.
 TITLE_FLOOR = 0.75
@@ -32,6 +37,10 @@ _COMPANY_SUFFIXES = (
     "labs",
     "software",
     "digital",
+    "pvt",
+    "private",
+    "llp",
+    "limited",
 )
 _LEVEL_WORDS = ("senior", "junior", "mid", "lead", "principal", "staff", "sr", "jr", "i", "ii", "iii", "iv")
 _REMOTE_WORDS = ("remote", "worldwide", "anywhere", "work from home", "wfh", "global")
@@ -55,15 +64,24 @@ def company_domain_hint(company) -> str:
     if not company:
         return ""
     c = re.sub(r"[^a-z0-9]+", " ", str(company).lower()).strip()
-    c = re.sub(r"\s+(inc|llc|ltd|corp|corporation|co|gmbh|the)$", "", c).strip()
+    c = re.sub(
+        r"\s+(?:inc|llc|ltd|corp|corporation|co|gmbh|the|llp|limited|private|pvt)"
+        r"(?: (?:ltd|limited|private|pvt))?$",
+        "",
+        c,
+    ).strip()
     return c.replace(" ", "")
 
 
 def jaro_winkler(a, b) -> float:
-    """Jaro-Winkler similarity, pure-Python implementation.
+    """Jaro-Winkler similarity, 0.0-1.0; identical strings (incl. empty) score
+    1.0, any pair with one empty side scores 0.0.
 
-    `match_distance = max(0, max(len1, len2) // 2 - 1)` protects short strings
-    (e.g. 1-char and empty inputs never produce a negative window or crash).
+    With rapidfuzz installed the score is fuzz.ratio/100 (GIL-releasing C
+    implementation, same contract); otherwise the pure-Python implementation
+    below runs. `match_distance = max(0, max(len1, len2) // 2 - 1)` protects
+    short strings (e.g. 1-char and empty inputs never produce a negative
+    window or crash).
     """
     a = str(a or "").lower()
     b = str(b or "").lower()
@@ -71,6 +89,8 @@ def jaro_winkler(a, b) -> float:
         return 1.0
     if not a or not b:
         return 0.0
+    if _HAS_RAPIDFUZZ:
+        return _fuzz.ratio(a, b) / 100.0
     len1, len2 = len(a), len(b)
     match_distance = max(0, max(len1, len2) // 2 - 1)
     matched_a = [False] * len1
@@ -129,11 +149,14 @@ def jaccard(s1, s2) -> float:
 
 
 def description_similarity(desc1, desc2) -> float:
-    # Missing descriptions are neutral (0.5), never evidence of identity or
-    # difference. One-sided presence is also inconclusive (0.5) — stored rows
-    # from pre-v3 migrations may lack the column.
+    # Empty sides are informative, not neutral:
+    # - BOTH sides empty -> 1.0 (no discriminating text: equivalent identities)
+    # - exactly ONE side empty -> 0.0 (the present side is unmatched evidence,
+    #   so it supports nothing and cannot be neutral)
+    if not desc1 and not desc2:
+        return 1.0
     if not desc1 or not desc2:
-        return 0.5
+        return 0.0
     return jaccard(token_shingles(desc1), token_shingles(desc2))
 
 
@@ -307,7 +330,10 @@ def composite_similarity(
     url1="",
     url2="",
 ) -> tuple[str, float]:
-    """S = 0.35*S_title + 0.25*S_company + 0.15*S_location + 0.25*S_desc.
+    """S = 0.35*S_title + 0.25*S_company + 0.15*S_location + 0.25*S_desc
+    (when exactly one description side is empty the 0.25 desc weight is
+    redistributed to title/company: S = 0.50*S_title + 0.35*S_company +
+    0.15*S_location).
 
     Verdicts:
     - "none" if S_title < TITLE_FLOOR (hard gate)
@@ -320,7 +346,13 @@ def composite_similarity(
     s_company = company_similarity(company1, company2, domain1, domain2, url1, url2)
     s_location = location_similarity(location1, location2)
     s_desc = description_similarity(desc1, desc2)
-    s = 0.35 * s_title + 0.25 * s_company + 0.15 * s_location + 0.25 * s_desc
+    if (not desc1) != (not desc2):
+        # One-sided missing description: S_desc = 0.0 would veto identical
+        # title/company/location sightings (0.75 < REVIEW_THRESHOLD), so
+        # renormalize its 0.25 weight onto title (+0.15) and company (+0.10).
+        s = 0.50 * s_title + 0.35 * s_company + 0.15 * s_location
+    else:
+        s = 0.35 * s_title + 0.25 * s_company + 0.15 * s_location + 0.25 * s_desc
     if s_title < TITLE_FLOOR:
         return "none", round(s, 4)
     contradiction = company_contradiction(company1, company2, domain1, domain2, url1, url2)

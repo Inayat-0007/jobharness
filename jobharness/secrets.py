@@ -6,7 +6,7 @@ from pathlib import Path
 try:
     from dotenv import load_dotenv
 except ImportError:  # pragma: no cover
-    def load_dotenv(*a, **k):
+    def load_dotenv(*a, **k):  # type: ignore[misc]  # fallback shim, dotenv absent
         return False
 
 

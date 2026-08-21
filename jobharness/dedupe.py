@@ -1,14 +1,31 @@
 ﻿from __future__ import annotations
 
+import hashlib
 import json
+import re
 import sqlite3
 import time
 from pathlib import Path
 
 from . import algo
-from .models import Job
+from .logging import get_logger
+from .models import CLOSED, MISSING, VALID_AUTHENTIC, Job, job_id_hash
 
-SCHEMA_VERSION = 3
+SCHEMA_VERSION = 4
+
+# Batched commits: writes are committed every COMMIT_EVERY ops (or on flush()/
+# close()). WAL is enabled, so uncommitted writes are durable and visible to
+# reads on the same connection.
+COMMIT_EVERY = 50
+
+# Transient "database is locked" (SQLITE_BUSY) failures retry up to
+# _LOCK_RETRIES times with _LOCK_BACKOFF seconds between attempts.
+_LOCK_RETRIES = 3
+_LOCK_BACKOFF = 0.2
+
+# _backfill_descriptions() re-parses every reports/*/report.json when any
+# stored row lacks a description; guard so it runs at most once per process.
+_BACKFILL_RUN = False
 
 # v3 = v2 columns + identity/authenticity columns. `description` is stored so
 # cross-run fuzzy comparison can score description similarity.
@@ -107,7 +124,101 @@ def _store_block_key(keys) -> str:
     return ";" + ";".join(str(k) for k in (keys or []) if k) + ";"
 
 
+def _refresh_val(v):
+    """Return the incoming value for a text-column refresh, or None when it
+    must NOT overwrite the stored value (empty or the MISSING sentinel).
+    Used with `COALESCE(?, col)` so stored text survives empty re-sightings."""
+    if v is None:
+        return None
+    s = str(v)
+    if s.strip() == "" or s == MISSING:
+        return None
+    return v
+
+
+def _legacy_norm(text) -> str:
+    """The pre-v4 job_id_hash normalization: models._norm without the final
+    space-strip, so single spaces are kept ('Backend Engineer' -> 'backend
+    engineer'). Rows hashed before that change cannot be found by the new
+    hash, so the v4 migration re-identifies them with this helper."""
+    if not text:
+        return ""
+    text = str(text).strip().lower()
+    text = text.replace("++", "pp")
+    text = re.sub(r"(?<=[a-z0-9])#", "sharp", text)
+    text = re.sub(r"\s+", " ", text)
+    return re.sub(r"[^a-z0-9 ]+", "", text)
+
+
+def _legacy_job_id_hash(title, company, location="") -> str:
+    raw = f"{_legacy_norm(title)}|{_legacy_norm(company)}|{_legacy_norm(location)}"
+    return hashlib.sha1(raw.encode("utf-8")).hexdigest()
+
+
+# The refresh UPDATE shared by _update() and merge() (30 SET columns plus the
+# WHERE job_id_hash placeholder). job_id_hash (the key) is never rewritten;
+# text columns are COALESCE-refreshed so empty incoming values leave stored
+# text untouched.
+_UPDATE_SQL = (
+    "UPDATE jobs SET last_seen_at=?, seen_sources=?, title=COALESCE(?, title), "
+    "company=COALESCE(?, company), location=COALESCE(?, location), "
+    "role=COALESCE(?, role), date_posted=COALESCE(?, date_posted), "
+    "description=COALESCE(?, description), apply_url_direct=?, "
+    "authentic_status=?, confidence_score=?, valid_through=?, employer_domain=?, "
+    "canonical_job_id=?, block_key=?, possible_duplicate_of=?, identity_score=?, "
+    "authenticity_score=?, match_score=?, decision=?, matched_via=?, original_url=?, "
+    "canonical_url=?, final_url=?, description_fingerprint=?, job_version=?, posting_id=?, "
+    "source_authority=?, evidence=?, negative_evidence=? WHERE job_id_hash=?"
+)
+
+
+def _update_params(job: Job, now: float) -> tuple:
+    """The _UPDATE_SQL bind values in column order. The trailing WHERE
+    job_id_hash placeholder is filled in by the caller (the stored key for
+    merge, the incoming hash for upsert)."""
+    return (
+        now,
+        ",".join(job.seen_sources),
+        _refresh_val(job.title),
+        _refresh_val(job.company),
+        _refresh_val(job.location),
+        _refresh_val(job.role),
+        _refresh_val(job.date_posted),
+        _refresh_val(job.description),
+        job.apply_url_direct,
+        job.authentic_status,
+        job.confidence_score,
+        job.valid_through,
+        job.employer_domain,
+        job.canonical_job_id,
+        _store_block_key(job.block_key),
+        job.possible_duplicate_of,
+        job.identity_score,
+        job.authenticity_score,
+        job.match_score,
+        job.decision,
+        job.matched_via,
+        job.original_url,
+        job.canonical_url,
+        job.final_url,
+        job.description_fingerprint,
+        job.job_version,
+        job.posting_id,
+        job.source_authority,
+        _store_val(job.evidence),
+        _store_val(job.negative_evidence),
+    )
+
+
+_log = get_logger("dedupe")
+
+
 class DedupeStore:
+    # Bucketed candidate scan cap per incoming job (find_candidates).
+    CANDIDATE_LIMIT = 50
+    # Writes are committed every COMMIT_EVERY ops (or on flush()/close()).
+    COMMIT_EVERY = COMMIT_EVERY
+
     def __init__(
         self,
         db_path: str | Path = "jobs.db",
@@ -119,9 +230,12 @@ class DedupeStore:
         self.conn = sqlite3.connect(self.path)
         self.conn.row_factory = sqlite3.Row
         # Overlapping runs must not crash with 'database is locked': wait up to
-        # 5s for a lock, and WAL lets readers/writers coexist.
-        self.conn.execute("PRAGMA busy_timeout=5000")
+        # 30s for a lock, and WAL lets readers/writers coexist.
+        self.conn.execute("PRAGMA busy_timeout=30000")
         self.conn.execute("PRAGMA journal_mode=WAL")
+        self._pending = 0
+        self.norm_migrated_count = 0
+        self.norm_conflict_skipped = 0
         self._migrate()
         self._backfill_descriptions(reports_dir)
         self._prune(max_age_days)
@@ -132,13 +246,18 @@ class DedupeStore:
 
         Pre-v3 rows were stored without a description, which starves fuzzy
         merge for old rows (description similarity is a composite input).
-        Runs once at open time; newest report run wins per job_id_hash.
+        Runs at most once per process (module flag); newest report run wins
+        per job_id_hash.
         """
+        global _BACKFILL_RUN
+        if _BACKFILL_RUN:
+            return
         if not reports_dir:
             return
         rd = Path(reports_dir)
         if not rd.is_dir():
             return
+        _BACKFILL_RUN = True
         cur = self.conn.cursor()
         rows = cur.execute(
             "SELECT job_id_hash FROM jobs WHERE description IS NULL OR description=''"
@@ -192,6 +311,28 @@ class DedupeStore:
                     except sqlite3.OperationalError:
                         pass
         cur.execute("CREATE TABLE IF NOT EXISTS schema_meta (key TEXT PRIMARY KEY, value TEXT)")
+        stored_version = 0
+        cur.execute("SELECT value FROM schema_meta WHERE key='version'")
+        v_row = cur.fetchone()
+        if v_row is not None:
+            try:
+                stored_version = int(v_row[0])
+            except (TypeError, ValueError):
+                stored_version = 0
+        if stored_version < 4:
+            self.norm_migrated_count = self._migrate_legacy_hashes()
+            if self.norm_migrated_count:
+                _log.info(
+                    "re-hashed %d row(s) to the current job_id_hash normalization "
+                    "(legacy space-preserving hashes)",
+                    self.norm_migrated_count,
+                )
+            if self.norm_conflict_skipped:
+                _log.warning(
+                    "%d legacy row(s) kept their old hash: re-hash collided with "
+                    "an existing primary key",
+                    self.norm_conflict_skipped,
+                )
         cur.execute("INSERT OR REPLACE INTO schema_meta(key,value) VALUES('version',?)", (str(SCHEMA_VERSION),))
         for stmt in INDEX_STATEMENTS:
             try:
@@ -199,6 +340,97 @@ class DedupeStore:
             except sqlite3.OperationalError:
                 pass
         self.conn.commit()
+
+    def _migrate_legacy_hashes(self) -> int:
+        """One-time re-identification of rows stored under the pre-v4
+        job_id_hash normalization (models._norm used to keep single spaces).
+
+        For every row whose stored hash equals the legacy hash of its own
+        fields (and differs from the current canonical hash), rewrite
+        job_id_hash, canonical_job_id and block_key exactly as the insert path
+        would (Job built from the stored columns -> compute_canonical_id() +
+        algo.blocking_keys()). Rows already canonical are untouched; rows with
+        a NULL title/company are skipped (the legacy hash cannot be trusted);
+        rows whose new hash would collide with another row's primary key keep
+        their legacy hash. Returns the number of rows migrated; the number of
+        conflict skips is exposed on self.norm_conflict_skipped."""
+        cur = self.conn.cursor()
+        rows = cur.execute(
+            "SELECT rowid, job_id_hash, title, company, location, posting_id, "
+            "canonical_url, employer_domain, apply_url_direct FROM jobs ORDER BY rowid"
+        ).fetchall()
+        migrated = 0
+        self.norm_conflict_skipped = 0
+        for row in rows:
+            title, company, location = row["title"], row["company"], row["location"]
+            if title is None or company is None:
+                continue
+            legacy_hash = _legacy_job_id_hash(title, company, location)
+            new_hash = job_id_hash(title, company, location)
+            if row["job_id_hash"] != legacy_hash or row["job_id_hash"] == new_hash:
+                continue
+            job = Job(title=title, company=company, location=location)
+            job.posting_id = row["posting_id"]
+            job.canonical_url = row["canonical_url"]
+            job.employer_domain = row["employer_domain"]
+            job.apply_url_direct = row["apply_url_direct"]
+            canonical_id = job.compute_canonical_id()
+            block_key = _store_block_key(algo.blocking_keys(job))
+            try:
+                self._write(
+                    "UPDATE jobs SET job_id_hash=?, canonical_job_id=?, block_key=? WHERE rowid=?",
+                    (new_hash, canonical_id, block_key, row["rowid"]),
+                )
+            except sqlite3.IntegrityError:
+                self.norm_conflict_skipped += 1
+                continue
+            migrated += 1
+        if migrated or self.norm_conflict_skipped:
+            self._locked_retry(self.conn.commit, rollback_on_error=False)
+        return migrated
+
+    def _locked_retry(self, fn, *args, rollback_on_error: bool = True):
+        """Run fn, retrying transient SQLITE_BUSY ("locked") failures up to
+        _LOCK_RETRIES times with _LOCK_BACKOFF seconds between attempts, then
+        re-raise. Any other OperationalError propagates immediately."""
+        for attempt in range(_LOCK_RETRIES + 1):
+            try:
+                return fn(*args)
+            except sqlite3.OperationalError as exc:
+                if "locked" not in str(exc).lower():
+                    raise
+                if attempt >= _LOCK_RETRIES:
+                    raise
+                if rollback_on_error:
+                    try:
+                        self.conn.rollback()
+                    except sqlite3.Error:
+                        pass
+                time.sleep(_LOCK_BACKOFF)
+
+    def _write(self, sql: str, params) -> None:
+        self._locked_retry(self.conn.execute, sql, params)
+
+    def _maybe_commit(self) -> None:
+        """Batch commits: persist after every COMMIT_EVERY write ops."""
+        self._pending += 1
+        if self._pending >= self.COMMIT_EVERY:
+            self.flush()
+
+    def flush(self) -> None:
+        """Persist all pending writes and reset the batch counter."""
+        if self._pending:
+            self._locked_retry(self.conn.commit, rollback_on_error=False)
+            self._pending = 0
+
+    def wal_checkpoint(self) -> None:
+        """Force the WAL back into the main DB file
+        (`PRAGMA wal_checkpoint(TRUNCATE)`). Best effort: a busy checkpoint is
+        ignored; close() calls this after flushing."""
+        try:
+            self.conn.execute("PRAGMA wal_checkpoint(TRUNCATE)")
+        except sqlite3.OperationalError:
+            pass
 
     def _prune(self, max_age_days: int) -> None:
         if max_age_days <= 0:
@@ -211,7 +443,7 @@ class DedupeStore:
             pass
 
     def _insert(self, job: Job, now: float) -> None:
-        self.conn.execute(
+        self._write(
             "INSERT INTO jobs (job_id_hash, title, company, location, role, experience_needed, "
             "date_posted, description, apply_url_direct, first_seen_at, last_seen_at, seen_sources, "
             "authentic_status, confidence_score, valid_through, employer_domain, "
@@ -258,73 +490,62 @@ class DedupeStore:
         )
 
     def _update(self, job: Job, now: float) -> None:
-        self.conn.execute(
-            "UPDATE jobs SET last_seen_at=?, seen_sources=?, apply_url_direct=?, "
-            "authentic_status=?, confidence_score=?, valid_through=?, employer_domain=?, "
-            "canonical_job_id=?, block_key=?, possible_duplicate_of=?, identity_score=?, "
-            "authenticity_score=?, match_score=?, decision=?, matched_via=?, original_url=?, "
-            "canonical_url=?, final_url=?, description_fingerprint=?, job_version=?, posting_id=?, "
-            "source_authority=?, evidence=?, negative_evidence=? WHERE job_id_hash=?",
-            (
-                now,
-                ",".join(job.seen_sources),
-                job.apply_url_direct,
-                job.authentic_status,
-                job.confidence_score,
-                job.valid_through,
-                job.employer_domain,
-                job.canonical_job_id,
-                _store_block_key(job.block_key),
-                job.possible_duplicate_of,
-                job.identity_score,
-                job.authenticity_score,
-                job.match_score,
-                job.decision,
-                job.matched_via,
-                job.original_url,
-                job.canonical_url,
-                job.final_url,
-                job.description_fingerprint,
-                job.job_version,
-                job.posting_id,
-                job.source_authority,
-                _store_val(job.evidence),
-                _store_val(job.negative_evidence),
-                job.job_id_hash,
-            ),
-        )
+        # Text fields are refreshed with COALESCE: a non-empty incoming value
+        # overwrites the stored one, an empty/MISSING one leaves it untouched.
+        # job_id_hash (the key) and hashes are never rewritten.
+        self._write(_UPDATE_SQL, (*_update_params(job, now), job.job_id_hash))
 
     def upsert(self, job: Job) -> bool:
-        """Return True if this job is genuinely new (first time seen, not CLOSED).
+        """Return True if this job is genuinely new: first time seen and not
+        CLOSED, or a previously CLOSED row re-sighted as AUTHENTIC (re-alert).
 
         Stores all v3 columns; on repeat sight merges seen_sources as before.
+        When the re-alert path fires, sets `job.re_alerted = True` (Job is a
+        mutable dataclass) so callers can distinguish a recovery alert from a
+        first-seen alert; the stored authentic_status is refreshed too.
         """
+        return self._locked_retry(self._upsert_flow, job)
+
+    def _upsert_flow(self, job: Job) -> bool:
         cur = self.conn.cursor()
-        cur.execute("SELECT first_seen_at, seen_sources FROM jobs WHERE job_id_hash=?", (job.job_id_hash,))
+        cur.execute(
+            "SELECT first_seen_at, seen_sources, authentic_status FROM jobs WHERE job_id_hash=?",
+            (job.job_id_hash,),
+        )
         row = cur.fetchone()
         now = time.time()
         if row is None:
             self._insert(job, now)
             job.first_seen_at = now
             # Only alert on new jobs that are not already closed.
-            job.genuinely_new = job.authentic_status != "CLOSED"
+            job.genuinely_new = job.authentic_status != CLOSED
+            job.re_alerted = False
             job.seen_sources = [job.source_name]
-            self.conn.commit()
+            self._maybe_commit()
             return job.genuinely_new
-        first_seen, seen_sources = row
+        first_seen, seen_sources, stored_status = row
         job.first_seen_at = first_seen
-        job.genuinely_new = False
+        # CLOSED -> AUTHENTIC recovery: the job re-opened, so alert once more.
+        re_alert = stored_status == CLOSED and job.authentic_status == VALID_AUTHENTIC
+        job.genuinely_new = re_alert
+        job.re_alerted = re_alert
         srcs = (seen_sources or "").split(",")
         if job.source_name and job.source_name not in srcs:
             srcs.append(job.source_name)
         job.seen_sources = [s for s in srcs if s]
         self._update(job, now)
-        self.conn.commit()
-        return False
+        self._maybe_commit()
+        return job.genuinely_new
 
-    def find_candidates(self, job: Job, limit: int = 25) -> list[sqlite3.Row]:
+    def find_candidates(self, job: Job, limit: int | None = None) -> list[sqlite3.Row]:
         """Lookup order: exact job_id_hash -> canonical_job_id -> canonical URL /
-        posting_id -> rows matching any block_key (LIMIT-bounded)."""
+        posting_id -> rows matching any block_key (bucketed, LIMIT-bounded).
+
+        The blocking-key LIKE scans (bucketing) ensure candidates are narrowed
+        to the incoming job's block_key buckets before fuzzy scoring; the cap
+        is CANDIDATE_LIMIT (default 50)."""
+        if limit is None:
+            limit = self.CANDIDATE_LIMIT
         cur = self.conn.cursor()
         out: list[sqlite3.Row] = []
         seen: set[str] = set()
@@ -409,6 +630,8 @@ class DedupeStore:
             if s > best_s:
                 best_s = s
                 best = ("fuzzy", row, s, hint)
+        if best is None:
+            return result
         via, row, score, hint = best
         result["identity_score"] = score
         result["possible_duplicate_of"] = row["job_id_hash"]
@@ -423,50 +646,28 @@ class DedupeStore:
     def merge(self, job: Job, existing_row: sqlite3.Row) -> None:
         """Merge an incoming job into an existing stored row (exact or fuzzy
         match): update last_seen_at, append seen_sources, refresh mutable
-        fields. Does NOT set genuinely_new and never inserts a new row."""
+        fields (incl. non-empty title/company/location/role/description/
+        date_posted). Never inserts a new row. Canonical ids and hashes are
+        left intact (job_id_hash is the key).
+
+        Recovery semantics: when the stored row is CLOSED and the incoming job
+        is AUTHENTIC, this is a CLOSED->AUTHENTIC re-alert, so genuinely_new
+        and re_alerted are set True (exact-hash re-sightings reach merge, not
+        upsert, so this is what fires the advertised re-alert in real runs).
+        Any other sighting keeps the current semantics (False/False)."""
         now = time.time()
         job.first_seen_at = existing_row["first_seen_at"]
-        job.genuinely_new = False
+        recovery = existing_row["authentic_status"] == CLOSED and job.authentic_status == VALID_AUTHENTIC
+        job.genuinely_new = recovery
+        job.re_alerted = recovery
         srcs = (existing_row["seen_sources"] or "").split(",")
         if job.source_name and job.source_name not in srcs:
             srcs.append(job.source_name)
         job.seen_sources = [s for s in srcs if s]
-        self.conn.execute(
-            "UPDATE jobs SET last_seen_at=?, seen_sources=?, apply_url_direct=?, "
-            "authentic_status=?, confidence_score=?, valid_through=?, employer_domain=?, "
-            "canonical_job_id=?, block_key=?, possible_duplicate_of=?, identity_score=?, "
-            "authenticity_score=?, match_score=?, decision=?, matched_via=?, original_url=?, "
-            "canonical_url=?, final_url=?, description_fingerprint=?, job_version=?, posting_id=?, "
-            "source_authority=?, evidence=?, negative_evidence=? WHERE job_id_hash=?",
-            (
-                now,
-                ",".join(job.seen_sources),
-                job.apply_url_direct,
-                job.authentic_status,
-                job.confidence_score,
-                job.valid_through,
-                job.employer_domain,
-                job.canonical_job_id,
-                _store_block_key(job.block_key),
-                job.possible_duplicate_of,
-                job.identity_score,
-                job.authenticity_score,
-                job.match_score,
-                job.decision,
-                job.matched_via,
-                job.original_url,
-                job.canonical_url,
-                job.final_url,
-                job.description_fingerprint,
-                job.job_version,
-                job.posting_id,
-                job.source_authority,
-                _store_val(job.evidence),
-                _store_val(job.negative_evidence),
-                existing_row["job_id_hash"],
-            ),
-        )
-        self.conn.commit()
+        self._write(_UPDATE_SQL, (*_update_params(job, now), existing_row["job_id_hash"]))
+        self._maybe_commit()
 
     def close(self):
+        self.flush()
+        self.wal_checkpoint()
         self.conn.close()

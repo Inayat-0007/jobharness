@@ -33,6 +33,11 @@ include = ["jobharness*"]
 [tool.pytest.ini_options]
 asyncio_mode = "auto"
 testpaths = ["tests"]
+markers = [
+    "browser: tests requiring a real browser (excluded from CI)",
+    "ml: tests requiring the ml extra (scikit-learn)",
+    "integration: tests requiring live network access",
+]
 
 [tool.ruff]
 line-length = 100

@@ -51,7 +51,7 @@ def decide(identity_score: float, authenticity_score: float, match_score: float,
             reasons[0] = "no known duplicates"
         return AUTO_ACCEPT, reasons
 
-    reasons: list[str] = []
+    reasons = []
     if REVIEW_MATCH <= match_score < AUTO_ACCEPT_MATCH:
         reasons.append("relevance medium")
     if MIN_UNCERTAIN_IDENTITY <= identity_score < AUTO_ACCEPT_IDENTITY:

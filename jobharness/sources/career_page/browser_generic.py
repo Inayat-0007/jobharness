@@ -6,11 +6,15 @@ import time
 from concurrent.futures import ThreadPoolExecutor, as_completed
 
 from ...browser import open_browser
-from ...fetcher import make_client, random_delay
+from ...fetcher import make_client, random_delay, resp_text
+from ...logging import get_logger
 from ...models import RawJob
 from ...profile import Profile
 from ..base import SourceAdapter
+from ..exceptions import SourceDownError
 from ..jobposting_ld import extract_jobpostings_from_html
+
+_LOG = get_logger("career_page_browser")
 
 JOB_HREF_RE = re.compile(r"/(job|jobs|position|positions|requisition|opening|vacancy)/", re.I)
 NAV_TEXTS = (
@@ -48,15 +52,19 @@ class CareerPageBrowserAdapter(SourceAdapter):
     page's JSON-LD JobPosting block, or a text fallback. Titles, locations and
     apply URLs come from the rendered page (never invented).
 
-    Sites are visited in parallel (4 headless contexts) with live progress
-    lines, so a run never looks stalled. Headless is safe: career pages are
-    public job boards, no login and no CAPTCHA. Only the first page of each
-    career site is scraped (no pagination).
+    Sites are visited in parallel (profile.browser_career_workers headless
+    contexts) with live progress lines, so a run never looks stalled. Headless
+    is safe: career pages are public job boards, no login and no CAPTCHA. Only
+    the first page of each career site is scraped (no pagination).
+
+    Error semantics: per-site failures inside a chunk are best-effort (one
+    broken career site never kills the adapter), but if every seed fails to
+    navigate (timeout/render error) or every chunk fails (browser launch)
+    the adapter raises SourceDownError; pages that rendered cleanly with no
+    job anchors anywhere return [] so the runner records an EMPTY status.
     """
 
     name = "career_page_browser"
-    _workers = 4
-    _detail_cap = 15
 
     def fetch(self, profile: Profile) -> list[RawJob]:
         seeds = []
@@ -73,55 +81,113 @@ class CareerPageBrowserAdapter(SourceAdapter):
                 seeds.append((company, u))
         if not seeds:
             return []
-        workers = min(self._workers, len(seeds))
+        workers = max(1, min(profile.browser_career_workers, len(seeds)))
         chunks = [seeds[i::workers] for i in range(workers)]
+        total_seeds = len(seeds)
+        total_nav_failures = 0
         out: list[RawJob] = []
+        failed_chunks = 0
         with ThreadPoolExecutor(max_workers=workers) as ex:
-            futs = [ex.submit(self._visit_chunk, i, chunk) for i, chunk in enumerate(chunks)]
+            futs = [ex.submit(self._visit_chunk, i, chunk, profile.enrich_cap) for i, chunk in enumerate(chunks)]
             for fut in as_completed(futs):
                 try:
-                    out.extend(fut.result())
+                    chunk_out, nav_failures = fut.result()
                 except Exception:
+                    failed_chunks += 1
                     continue
-        print(f"[{self.name}] done: {len(out)} jobs from {len(seeds)} career pages")
-        return out
+                out.extend(chunk_out)
+                total_nav_failures += nav_failures
+        if out:
+            print(f"[{self.name}] done: {len(out)} jobs from {len(seeds)} career pages")
+            return out
+        if total_nav_failures == total_seeds:
+            raise SourceDownError(
+                f"{self.name}: all {total_seeds} career page(s) failed to navigate (timeout or render failure)"
+            )
+        if failed_chunks == len(chunks):
+            raise SourceDownError(
+                f"{self.name}: all {len(chunks)} chunk(s) failed (browser launch or navigation)"
+            )
+        return []
 
-    def _visit_chunk(self, worker: int, chunk: list) -> list:
+    def _visit_chunk(self, worker: int, chunk: list, enrich_cap: int) -> tuple[list, int]:
         out: list[RawJob] = []
-        with open_browser(
-            f"career_{worker}",
-            headless=True,
-            use_real_profile=False,
-            timezone_id="Asia/Kolkata",
-            locale="en-IN",
-            serialize=False,
-        ) as (_p, browser):
-            page = browser.pages[0] if browser.pages else browser.new_page()
-            total = len(chunk)
-            for i, (company, seed) in enumerate(chunk, start=1):
-                print(f"[{self.name}] [{i}/{total}] {company or seed}")
-                time.sleep(random.uniform(0.5, 1.5))
-                try:
-                    page.goto(seed, timeout=25000, wait_until="domcontentloaded")
-                except Exception:
-                    continue
-                time.sleep(3.5)
-                try:
-                    html = page.content()
-                except Exception:
-                    continue
-                jobs = []
-                try:
-                    jobs = extract_jobpostings_from_html(html, self.name, seed, company)
-                except Exception:
+        nav_failures = 0
+        try:
+            with open_browser(
+                f"career_{worker}",
+                headless=True,
+                use_real_profile=False,
+                timezone_id="Asia/Kolkata",
+                locale="en-IN",
+                serialize=False,
+            ) as (_p, browser):
+                page = browser.pages[0] if browser.pages else browser.new_page()
+                total = len(chunk)
+                for i, (company, seed) in enumerate(chunk, start=1):
+                    print(f"[{self.name}] [{i}/{total}] {company or seed}")
+                    time.sleep(random.uniform(0.5, 1.5))
+                    try:
+                        page.goto(seed, timeout=25000, wait_until="domcontentloaded")
+                    except Exception:
+                        nav_failures += 1
+                        continue
+                    time.sleep(3.5)
+                    try:
+                        html = page.content()
+                    except Exception:
+                        nav_failures += 1
+                        continue
                     jobs = []
-                if not jobs:
-                    jobs = self._extract_anchors(page, seed, company)
-                if jobs:
-                    self._enrich(jobs[: self._detail_cap])
-                    print(f"[{self.name}] {company or seed}: {len(jobs)} jobs")
-                out.extend(jobs)
-        return out
+                    try:
+                        jobs = extract_jobpostings_from_html(html, self.name, seed, company)
+                    except Exception:
+                        jobs = []
+                    if not jobs:
+                        jobs = self._extract_anchors(page, seed, company)
+                    if jobs:
+                        self._enrich(jobs[:enrich_cap])
+                        print(f"[{self.name}] {company or seed}: {len(jobs)} jobs")
+                    out.extend(jobs)
+        except Exception as e:
+            _LOG.warning(
+                "browser unavailable (%s); falling back to HTTP JSON-LD for %d seed(s)",
+                e,
+                len(chunk),
+            )
+            return self._http_fallback(chunk)
+        return out, nav_failures
+
+    def _http_fallback(self, chunk: list) -> tuple[list, int]:
+        """Plain-HTTP JSON-LD fallback when the browser cannot launch.
+
+        Same extraction path as career_page_generic: many career sites
+        (Microsoft, Adobe, SmartRecruiters-hosted) serve JSON-LD in static
+        HTML. Best-effort per seed; if every seed yields nothing the source
+        is treated as down.
+        """
+        out: list[RawJob] = []
+        for company, seed in chunk:
+            print(f"[{self.name}] [http] {company or seed}")
+            try:
+                with make_client() as client:
+                    resp = client.get(seed)
+            except Exception:
+                continue
+            if resp.status_code != 200:
+                continue
+            try:
+                jobs = extract_jobpostings_from_html(resp_text(resp), self.name, seed, company)
+            except Exception:
+                jobs = []
+            if jobs:
+                print(f"[{self.name}] {company or seed}: {len(jobs)} jobs (HTTP JSON-LD)")
+            out.extend(jobs)
+        if not out:
+            raise SourceDownError(
+                f"{self.name}: HTTP fallback found no jobs for {len(chunk)} career page(s)"
+            )
+        return out, 0
 
     def _extract_anchors(self, page, seed: str, company: str) -> list:
         try:
@@ -170,7 +236,13 @@ class CareerPageBrowserAdapter(SourceAdapter):
 
     def _enrich(self, jobs: list) -> list:
         """Fetch each job's detail page; description/location/date from JSON-LD
-        JobPosting, or a stripped-text fallback. Parallel, rate-limited."""
+        JobPosting, or a stripped-text fallback. Parallel, rate-limited.
+
+        Enrichment is strictly best-effort: per-job fetch/parse failures are
+        skipped and the counter `enrich_failures` is bumped for raised worker
+        errors. Even if enrichment fails entirely, the raw job cards already
+        collected still get returned.
+        """
 
         def _one(job: RawJob) -> None:
             random_delay()
@@ -182,7 +254,7 @@ class CareerPageBrowserAdapter(SourceAdapter):
             if resp.status_code != 200:
                 return
             try:
-                ld = extract_jobpostings_from_html(resp.text, self.name, resp.url or "", job.company or "")
+                ld = extract_jobpostings_from_html(resp.text, self.name, str(resp.url or ""), job.company or "")
             except Exception:
                 ld = []
             if ld:
@@ -196,11 +268,16 @@ class CareerPageBrowserAdapter(SourceAdapter):
             elif not job.description:
                 job.description = _strip_html(resp.text)[:4000]
 
+        enrich_failures = 0
         with ThreadPoolExecutor(max_workers=5) as ex:
             futs = [ex.submit(_one, j) for j in jobs]
             for fut in as_completed(futs):
                 try:
                     fut.result()
                 except Exception:
-                    pass
+                    enrich_failures += 1
+        if enrich_failures:
+            _LOG.warning(
+                "career_page_browser: %d/%d detail enrichments failed", enrich_failures, len(jobs)
+            )
         return jobs

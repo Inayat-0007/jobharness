@@ -1,5 +1,7 @@
 from __future__ import annotations
 
+from concurrent.futures import ThreadPoolExecutor
+
 from ...fetcher import make_client, random_delay, resp_text
 from ...models import RawJob
 from ...profile import Profile
@@ -33,14 +35,19 @@ class GenericCareerPageAdapter(SourceAdapter):
             if u:
                 seeds.append((company, u))
         out: list[RawJob] = []
-        for company, seed in seeds:
-            random_delay()
-            with make_client() as client:
-                try:
-                    resp = client.get(seed)
-                except Exception:
-                    continue
-                if resp.status_code != 200:
-                    continue
-            out.extend(extract_jobpostings_from_html(resp_text(resp), self.name, seed, company))
+        with ThreadPoolExecutor(max_workers=max(1, profile.career_fetch_workers)) as ex:
+            futs = [ex.submit(self._fetch_seed, company, seed) for company, seed in seeds]
+            for fut in futs:
+                out.extend(fut.result())
         return out
+
+    def _fetch_seed(self, company: str, seed: str) -> list[RawJob]:
+        random_delay()
+        with make_client() as client:
+            try:
+                resp = client.get(seed)
+            except Exception:
+                return []
+            if resp.status_code != 200:
+                return []
+        return extract_jobpostings_from_html(resp_text(resp), self.name, seed, company)

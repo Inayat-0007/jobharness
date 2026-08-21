@@ -4,13 +4,15 @@ from ...fetcher import blocked_response, make_client, random_delay
 from ...models import RawJob
 from ...profile import Profile
 from ..base import SourceAdapter
-from ..exceptions import BlockedError
+from ..exceptions import BlockedError, ParseFailureError
 
 
 class RemoteOKAdapter(SourceAdapter):
     name = "remoteok"
 
     def fetch(self, profile: Profile) -> list[RawJob]:
+        # RemoteOK's public API returns ALL active jobs in one response - it
+        # supports no page/offset parameter, so pagination is not applicable.
         url = "https://remoteok.com/api"
         random_delay()
         out: list[RawJob] = []
@@ -22,6 +24,20 @@ class RemoteOKAdapter(SourceAdapter):
                 data = resp.json()
             except Exception:
                 return out
+        # Some mirrors wrap the job list under a key like "data"/"jobs".
+        if isinstance(data, dict):
+            for value in data.values():
+                if isinstance(value, list):
+                    data = value
+                    break
+            else:
+                raise ParseFailureError(
+                    f"{self.name}: API payload dict contains no list (keys: {sorted(data)})"
+                )
+        if not isinstance(data, list) or not all(isinstance(j, dict) for j in data):
+            raise ParseFailureError(
+                f"{self.name}: API payload is not a list of job objects: {type(data).__name__}"
+            )
         # First element is a metadata dict; rest are jobs
         jobs = [j for j in data if isinstance(j, dict) and "slug" in j]
         for j in jobs:

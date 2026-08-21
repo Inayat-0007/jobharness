@@ -13,8 +13,8 @@ from ..browser import (
 )
 from ..models import RawJob
 from ..profile import Profile
-from .base import SourceAdapter
-from .exceptions import AuthRequiredError, RateLimitedError
+from .base import SourceAdapter, raise_navigation_failure
+from .exceptions import AuthRequiredError, BlockedError
 
 logger = logging.getLogger(__name__)
 
@@ -36,16 +36,11 @@ class LinkedInAdapter(SourceAdapter):
         for mobile in (False, True):
             try:
                 return self._fetch(profile, mobile=mobile)
-            except (RateLimitedError, AuthRequiredError) as e:
-                last_err = e
-                if not mobile:
-                    continue
-                raise
             except Exception as e:
                 last_err = e
-                continue
-        if last_err:
+        if last_err is not None:
             print(f"[{self.name}] all attempts failed: {last_err}")
+            raise last_err
         return []
 
     def _fetch(self, profile: Profile, mobile: bool = False) -> list[RawJob]:
@@ -63,29 +58,23 @@ class LinkedInAdapter(SourceAdapter):
         out: list[RawJob] = []
         with open_browser(self.name, headless=False, mobile=mobile) as (_p, browser):
             page = browser.pages[0] if browser.pages else browser.new_page()
+            goto_err = None
             try:
                 page.goto(url, timeout=60000, wait_until="domcontentloaded")
-            except Exception:
-                pass
+            except Exception as e:
+                goto_err = e
             time.sleep(4 if not mobile else 3)
             if self._login_wall(page):
                 if not wait_for_login(page, self.name, url, self._login_wall, timeout=300):
-                    if not mobile:
-                        raise AuthRequiredError(f"{self.name}: login wait timed out")
-                    return out
+                    raise AuthRequiredError(f"{self.name}: login wait timed out")
             block = detect_block(page)
             if block:
                 if block == "captcha":
                     if not wait_for_captcha(page, self.name, timeout=600):
-                        if not mobile:
-                            raise RateLimitedError(f"{self.name}: captcha wait timed out")
-                        return out
+                        raise BlockedError(f"{self.name}: captcha wait timed out")
                     time.sleep(3)
                 else:
-                    # denied / hard block -> try mobile fallback if not already mobile
-                    if not mobile:
-                        raise RateLimitedError(f"{self.name}: blocked: {block}")
-                    return out
+                    raise BlockedError(f"{self.name}: blocked: {block}")
             if not wait_for_selector_any(
                 page,
                 [
@@ -97,8 +86,9 @@ class LinkedInAdapter(SourceAdapter):
                 ],
                 timeout=20000,
             ):
-                # after captcha solve, content may now be present
                 if not page.query_selector("li.jobs-search-results__list-item, div.job-card-container, a[href*='/jobs/view/']"):
+                    if goto_err is not None:
+                        raise_navigation_failure(self.name, page, goto_err)
                     return out
             scroll_to_load(page, max_scrolls=8, pause=0.7)
             cards = page.query_selector_all(
@@ -149,6 +139,8 @@ class LinkedInAdapter(SourceAdapter):
                 except Exception as e:
                     logger.debug("linkedin card parse skipped: %s", e)
                     continue
+        if not out and goto_err is not None:
+            raise_navigation_failure(self.name, page, goto_err)
         return out
 
     def _login_wall(self, page) -> bool:

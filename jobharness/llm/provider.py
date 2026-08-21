@@ -1,11 +1,19 @@
 from __future__ import annotations
 
 import json
+import logging
 import re
+import threading
+import time
 
 import httpx
 
 from .. import secrets
+
+logger = logging.getLogger(__name__)
+
+_client: httpx.Client | None = None
+_client_lock = threading.Lock()
 
 PROVIDER_ENV = {
     "gemini": ("GEMINI_API_KEY", "GEMINI_BASE_URL", "GEMINI_MODEL"),
@@ -18,11 +26,21 @@ PROVIDER_ENV = {
 DEFAULT_FALLBACK = ["gemini", "glm", "qwen"]
 
 
+def _get_client() -> httpx.Client:
+    """Module-level pooled client, created lazily on first use (thread-safe)."""
+    global _client
+    if _client is None:
+        with _client_lock:
+            if _client is None:
+                _client = httpx.Client(timeout=60.0)
+    return _client
+
+
 def _provider_cfg(name: str):
-    key_env, base_env, model_env = PROVIDER_ENV.get(name, (None, None, None))
-    if key_env is None:
+    env = PROVIDER_ENV.get(name)
+    if env is None:
         raise ValueError(f"Unknown LLM provider: {name}")
-    return secrets.get(key_env), secrets.get(base_env), secrets.get(model_env)
+    return secrets.get(env[0]), secrets.get(env[1]), secrets.get(env[2])
 
 
 def complete(prompt: str, schema_hint: str = "", provider: str = "gemini", max_tokens: int = 900) -> str:
@@ -32,18 +50,19 @@ def complete(prompt: str, schema_hint: str = "", provider: str = "gemini", max_t
     Raises RuntimeError if all providers are unavailable / unconfigured.
     """
     order = [provider] + [p for p in DEFAULT_FALLBACK if p != provider]
-    last_err: str | None = None
+    errors: dict[str, str] = {}
     for name in order:
         api_key, base_url, model = _provider_cfg(name)
         if not api_key or not base_url or not model:
-            last_err = last_err or f"provider '{name}' not configured"
+            errors[name] = "not configured"
             continue
         try:
             return _call_openai_compat(base_url, api_key, model, prompt, schema_hint, max_tokens)
         except Exception as e:  # pragma: no cover - network path
-            last_err = f"{name}: {e}"
+            errors[name] = str(e)
             continue
-    raise RuntimeError(f"All LLM providers failed. Last error: {last_err}")
+    detail = ", ".join(f"{name}: {err}" for name, err in errors.items())
+    raise RuntimeError(f"All LLM providers failed. Errors: {detail}")
 
 
 def _call_openai_compat(base_url: str, api_key: str, model: str, prompt: str, schema_hint: str, max_tokens: int) -> str:
@@ -68,10 +87,21 @@ def _call_openai_compat(base_url: str, api_key: str, model: str, prompt: str, sc
         "Authorization": f"Bearer {api_key}",
         "Content-Type": "application/json",
     }
-    with httpx.Client(timeout=60.0) as client:
+    client = _get_client()
+    resp = client.post(url, json=payload, headers=headers)
+    if resp.status_code == 429:
+        retry_after = resp.headers.get("Retry-After", "")
+        try:
+            delay = float(retry_after)
+        except (TypeError, ValueError):
+            delay = 5.0
+        logger.warning("LLM provider rate-limited (429), retrying in %.1fs", delay)
+        time.sleep(delay)
         resp = client.post(url, json=payload, headers=headers)
-        resp.raise_for_status()
-        data = resp.json()
+        if resp.status_code == 429:
+            logger.warning("LLM provider still rate-limited (429) after retry")
+    resp.raise_for_status()
+    data = resp.json()
     try:
         return data["choices"][0]["message"]["content"]
     except (KeyError, IndexError):

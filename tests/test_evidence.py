@@ -6,6 +6,7 @@ from jobharness.evidence.reason import compose_reasons, reason_text
 from jobharness.evidence.source import SOURCE_AUTHORITY, SourceStatus, source_authority
 from jobharness.models import CLOSED, VALID_AUTHENTIC, Job
 from jobharness.scoring.authenticity import authenticity_score
+from jobharness.verify import DEGRADED
 
 
 def rich_job():
@@ -71,6 +72,26 @@ def test_negative_signals_broken_application():
     j.apply_url_direct = ""
     sig = negative_signals(j)
     assert "broken_application" in sig
+
+
+def test_negative_signals_degraded_retry_ctx_emits_unreachable():
+    j = rich_job()
+    j.authentic_status = DEGRADED
+    sig = negative_signals(j, {"retries": 2, "error": "timeout"})
+    assert "verification_unreachable" in sig
+
+
+def test_negative_signals_authentic_normal_ctx_no_unreachable():
+    j = rich_job()
+    sig = negative_signals(j, {"status_code": 200, "redirect_to": "https://acme.com/careers"})
+    assert "verification_unreachable" not in sig
+
+
+def test_negative_signals_authentic_empty_ctx_unchanged():
+    j = rich_job()
+    sig = negative_signals(j)
+    assert "verification_unreachable" not in sig
+    assert sig == []
 
 
 def test_reason_composition():

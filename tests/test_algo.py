@@ -98,6 +98,18 @@ def test_jaro_winkler_edge_cases():
     assert algo.jaro_winkler("Backend Engineer", "Backend Engineer") == 1.0
 
 
+def test_jaro_winkler_values_rapidfuzz_independent():
+    """Known-value checks that hold whether the rapidfuzz path or the
+    pure-Python implementation is active (compared against expected values,
+    not against each other)."""
+    assert algo.jaro_winkler("", "") == 1.0
+    assert algo.jaro_winkler("Python", "") == 0.0
+    assert algo.jaro_winkler("Backend Engineer", "Backend Engineer") == 1.0
+    assert algo.jaro_winkler("aaa", "bbb") == 0.0
+    assert algo.jaro_winkler("abc", "xyz") == 0.0
+    assert algo.jaro_winkler("a", "b") == 0.0
+
+
 def test_company_similarity_matching_domain_strong():
     s = algo.company_similarity(
         "Acme Inc", "Acme", "acme.com", "acme.com",
@@ -138,8 +150,33 @@ def test_description_similarity():
     d1 = "we are looking for a backend engineer with python api experience"
     d2 = "we are looking for a backend engineer with python api experience and strong communication skills"
     assert 0.5 < algo.description_similarity(d1, d2) < 1.0
-    assert algo.description_similarity("", "") == 0.5
-    assert algo.description_similarity(DESC, "") == 0.5
+    assert algo.description_similarity("", "") == 1.0
+    assert algo.description_similarity(DESC, "") == 0.0
+
+
+def test_one_sided_empty_description_renormalized():
+    # Exactly one side missing a description: S_desc = 0.0, and its 0.25
+    # weight is redistributed to title/company, so identical
+    # title/company/location still auto-merges.
+    verdict, s = comp(
+        "Backend Engineer", "Acme", "Remote", "",
+        "Backend Engineer", "Acme", "Remote", DESC,
+        u2="https://acme.com/j/2",
+    )
+    assert verdict == "auto_merge"
+    assert s >= algo.HIGH_THRESHOLD
+
+
+def test_both_empty_descriptions_auto_merge():
+    # Both sides empty: no discriminating text (S_desc = 1.0); identical
+    # title/company/location auto-merges.
+    verdict, s = comp(
+        "Backend Engineer", "Acme", "Remote", "",
+        "Backend Engineer", "Acme", "Remote", "",
+        u2="https://acme.com/j/2",
+    )
+    assert verdict == "auto_merge"
+    assert s >= algo.HIGH_THRESHOLD
 
 
 def test_title_stem():

@@ -70,3 +70,12 @@ def test_allowlist_matches_whole_word_not_substring():
     assert matches_profile(_gh_job("Airbnbish Co"), p) is False
     # Multi-word company with the allowed slug as one token still matches.
     assert matches_profile(_gh_job("Airbnb Inc."), p) is True
+
+
+def test_company_allowlist_cached_on_profile():
+    p = _profile(greenhouse_boards=["airbnb", "stripe"])
+    assert matches_profile(_gh_job("Airbnb"), p) is True
+    cached = getattr(p, "_allowed_companies", None)
+    assert cached == {"airbnb", "stripe"}
+    assert matches_profile(_gh_job("Stripe"), p) is True
+    assert p._allowed_companies is cached

@@ -1,15 +1,19 @@
 from __future__ import annotations
 
 import html as _html
+import logging
 import re
+import threading
 import time
 from concurrent.futures import ThreadPoolExecutor, as_completed
 from urllib.parse import urlparse, urlunparse
 
-from ..fetcher import make_client, random_delay, resp_text
+from ..fetcher import get_shared_client, make_client, random_delay, resp_text
 from ..models import RawJob
 from ..profile import Profile
 from .base import SourceAdapter
+
+_LOGGER = logging.getLogger(__name__)
 
 _LI_UA = (
     "Mozilla/5.0 (Windows NT 10.0; Win64; x64) AppleWebKit/537.36 "
@@ -70,7 +74,7 @@ class LinkedInGuestAdapter(SourceAdapter):
             if len(out) >= 50:
                 break
         if out:
-            self._enrich(out)
+            self._enrich(out, profile.enrich_cap)
         return out
 
     def _parse(self, html: str, where: str) -> list[RawJob]:
@@ -105,32 +109,53 @@ class LinkedInGuestAdapter(SourceAdapter):
                 continue
         return out
 
-    def _enrich(self, jobs: list) -> None:
-        """Fetch the first 20 jobs' detail pages and pull descriptions.
+    def _enrich(self, jobs: list, cap: int = 50) -> None:
+        """Fetch the first `cap` jobs' detail pages and pull descriptions.
 
         LinkedIn rate-limits guest detail pages after ~20 requests per burst
-        (HTTP 999). We cap at 20, with an automatic retry on 999, so the
-        freshest, most relevant jobs get descriptions. Later jobs fall back
-        to title-only matching, which still catches roles with keywords in
-        the title (e.g. "Python Developer").
+        (HTTP 999). The cap comes from profile.enrich_cap (default 50), with
+        an automatic retry on 999, so the freshest, most relevant jobs get
+        descriptions. Later jobs fall back to title-only matching, which
+        still catches roles with keywords in the title (e.g. "Python
+        Developer").
+
+        All requests go through the shared client (which carries the session
+        cookies from the search pages), and a warm-up GET to the jobs home
+        page seeds bcookie/li_sugr before the burst. A circuit breaker aborts
+        the burst after 3 consecutive 999s so we don't keep burning requests.
         """
-        to_enrich = jobs[:20]
+        to_enrich = jobs[:cap]
+        self._warm_up_cookies()
+
+        breaker = {"consecutive_999": 0}
+        lock = threading.Lock()
+        abort = {"flag": False}
 
         def _one(job: RawJob, retries: int = 1) -> None:
             random_delay()
-            clean = urlunparse(urlparse(job.apply_url)._replace(query=""))
+            if abort["flag"]:
+                return
+            clean = urlunparse(urlparse(str(job.apply_url or ""))._replace(query=""))
             try:
-                with make_client(timeout=20.0) as client:
-                    resp = client.get(
-                        clean,
-                        headers={"User-Agent": _LI_UA, "Referer": "https://www.linkedin.com/jobs/"},
-                    )
+                resp = get_shared_client(timeout=20.0).get(
+                    clean,
+                    headers={"User-Agent": _LI_UA, "Referer": "https://www.linkedin.com/jobs/"},
+                )
             except Exception:
                 return
-            if resp.status_code == 999 and retries > 0:
-                time.sleep(5)
-                _one(job, retries=0)
+            if resp.status_code == 999:
+                with lock:
+                    breaker["consecutive_999"] += 1
+                    hits = breaker["consecutive_999"]
+                if hits >= 3:
+                    abort["flag"] = True
+                    return
+                if retries > 0:
+                    time.sleep(5)
+                    _one(job, retries=0)
                 return
+            with lock:
+                breaker["consecutive_999"] = 0
             if resp.status_code != 200:
                 return
             job.description = self._extract_desc(resp_text(resp))
@@ -138,10 +163,37 @@ class LinkedInGuestAdapter(SourceAdapter):
         with ThreadPoolExecutor(max_workers=6) as ex:
             futs = [ex.submit(_one, j) for j in to_enrich]
             for fut in as_completed(futs):
+                if abort["flag"]:
+                    for f in futs:
+                        f.cancel()
+                    break
                 try:
                     fut.result()
                 except Exception:
                     pass
+        if abort["flag"]:
+            _LOGGER.warning(
+                "linkedin_guest: enrichment aborted after 3 consecutive HTTP 999 "
+                "(rate-limited); %d job(s) left without descriptions",
+                sum(1 for j in to_enrich if not j.description),
+            )
+
+    @staticmethod
+    def _warm_up_cookies() -> None:
+        """Seed session cookies (bcookie, li_sugr) on the shared client.
+
+        The shared client carries cookies from the search pages; a single
+        GET to the jobs home page before the detail burst makes detail
+        requests look like the same logged-out session instead of fresh
+        sessions that LinkedIn rate-limits immediately.
+        """
+        try:
+            get_shared_client(timeout=20.0).get(
+                "https://www.linkedin.com/jobs/",
+                headers={"User-Agent": _LI_UA, "Referer": "https://www.linkedin.com/"},
+            )
+        except Exception:
+            pass
 
     @staticmethod
     def _extract_desc(html: str) -> str:

@@ -1,7 +1,9 @@
 from __future__ import annotations
 
 import random
+import threading
 import time
+from typing import Any
 
 import httpx
 
@@ -12,6 +14,9 @@ UA_POOL = [
     "Mozilla/5.0 (Macintosh; Intel Mac OS X 10_15_7) AppleWebKit/537.36 (KHTML, like Gecko) Chrome/123.0.0.0 Safari/537.36",
     "Mozilla/5.0 (X11; Linux x86_64) AppleWebKit/537.36 (KHTML, like Gecko) Chrome/124.0.0.0 Safari/537.36",
 ]
+
+_shared_client: httpx.Client | None = None
+_shared_client_lock = threading.Lock()
 
 
 def pick_proxy() -> str | None:
@@ -25,9 +30,10 @@ def random_delay(low: float = 0.5, high: float = 2.0) -> None:
     time.sleep(random.uniform(low, high))
 
 
-def make_client(timeout: float = 30.0) -> httpx.Client:
+def _client_kwargs(timeout: float, *, limits: httpx.Limits | None = None) -> dict[str, Any]:
+    """Build the shared httpx.Client kwargs: UA pool, headers, redirects, proxy, optional limits."""
     proxy = pick_proxy()
-    client_kwargs = dict(
+    kwargs: dict[str, Any] = dict(
         timeout=timeout,
         follow_redirects=True,
         headers={
@@ -36,9 +42,34 @@ def make_client(timeout: float = 30.0) -> httpx.Client:
             "Accept-Language": "en-US,en;q=0.9",
         },
     )
+    if limits is not None:
+        kwargs["limits"] = limits
     if proxy:
-        client_kwargs["proxy"] = proxy
-    return httpx.Client(**client_kwargs)
+        kwargs["proxy"] = proxy
+    return kwargs
+
+
+def make_client(timeout: float = 30.0) -> httpx.Client:
+    return httpx.Client(**_client_kwargs(timeout))
+
+
+def get_shared_client(timeout: float = 30.0) -> httpx.Client:
+    """Return a process-wide pooled httpx.Client (created once, thread-safe).
+
+    Connection pooling / keep-alive is shared across all callers. Callers may
+    still override the timeout per request (e.g. client.get(url, timeout=20.0)).
+    """
+    global _shared_client
+    if _shared_client is None:
+        with _shared_client_lock:
+            if _shared_client is None:
+                _shared_client = httpx.Client(
+                    **_client_kwargs(
+                        timeout,
+                        limits=httpx.Limits(max_connections=20, max_keepalive_connections=10),
+                    )
+                )
+    return _shared_client
 
 
 def resp_text(resp: httpx.Response) -> str:

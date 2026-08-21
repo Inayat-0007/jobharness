@@ -2,8 +2,13 @@ from __future__ import annotations
 
 from unittest import mock
 
+import pytest
+
 from jobharness.profile import Profile
+from jobharness.sources.exceptions import BlockedError
 from jobharness.sources.google_jobs import GoogleJobsAdapter
+
+JOBS_URL = "https://www.google.com/search?q=test&ibp=htl;jobs"
 
 LD_HTML = """
 <html><head>
@@ -21,10 +26,11 @@ BLOB_HTML = '<html><script>window.data = {"@type":"JobPosting","title":"Blob Rol
 
 
 class FakeResp:
-    def __init__(self, html, status=200, blocked=False):
+    def __init__(self, html, status=200, blocked=False, url=JOBS_URL):
         self.status_code = status
         self.text = html
         self._blocked = blocked
+        self.url = url
 
     def json(self):
         return {}
@@ -68,13 +74,28 @@ def test_google_jobs_blob_fallback():
     assert len(jobs) == 1
 
 
-def test_google_jobs_non_200_empty():
-    assert _adapter("", status=403) == []
+def test_google_jobs_non_200_blocked():
+    with pytest.raises(BlockedError):
+        _adapter("", status=403)
 
 
-def test_google_jobs_blocked_empty():
-    # 403 triggers blocked_response -> empty, even with valid HTML
-    assert _adapter(LD_HTML, status=403) == []
+def test_google_jobs_blocked():
+    # 403 triggers blocked_response -> BlockedError, even with valid HTML
+    with pytest.raises(BlockedError):
+        _adapter(LD_HTML, status=403)
+
+
+def test_google_jobs_is_shell():
+    adapter = GoogleJobsAdapter()
+    shell_url = "https://www.google.com/search?q=test&udm=8"
+    # redirect off the jobs vertical (udm=8 shell)
+    assert adapter._is_shell(FakeResp("<html>normal</html>", url=shell_url))
+    # JS-only / anti-bot markers in the body
+    assert adapter._is_shell(FakeResp("<html>Please enable javascript</html>"))
+    assert adapter._is_shell(FakeResp("<html>we detected unusual traffic</html>"))
+    assert adapter._is_shell(FakeResp('<html><noscript>enable js</noscript></html>'))
+    # clean jobs page is not a shell
+    assert not adapter._is_shell(FakeResp("<html>no jobs</html>"))
 
 
 def test_google_jobs_clean_page_empty():

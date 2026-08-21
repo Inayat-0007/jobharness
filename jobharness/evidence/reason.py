@@ -20,6 +20,7 @@ NEGATIVE_REASONS = {
     "broken_application": "no usable application URL",
     "captcha_required": "application blocked by captcha",
     "blocked_response": "application blocked (403/anti-bot)",
+    "verification_unreachable": "verification failed (posting unreachable)",
     "affiliate_domain": "application goes through an affiliate domain",
 }
 

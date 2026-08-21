@@ -1,16 +1,17 @@
 from __future__ import annotations
 
-import logging
 import os
 import random
 import threading
 import time
 from contextlib import contextmanager, nullcontext
 from pathlib import Path
+from typing import Any
 
 from .fetcher import UA_POOL, pick_proxy
+from .logging import get_logger
 
-logger = logging.getLogger(__name__)
+logger = get_logger("browser")
 
 
 _BROWSER_LOCK = threading.Lock()
@@ -33,8 +34,9 @@ def cookie_dir() -> Path:
 
     COOKIE_DIR env var overrides the location; otherwise the user cache dir
     (%LOCALAPPDATA%\\jobharness\\cookies on Windows, XDG cache elsewhere).
-    Falls back to the legacy repo-tree `cookies/` when no cache dir exists.
-    Runtime state is never committed to the repository.
+    Falls back to the legacy repo-tree `cookies/` when no cache dir exists
+    or cannot be created (common on servers). Runtime state is never
+    committed to the repository.
     """
     env = os.environ.get("COOKIE_DIR", "").strip()
     if env:
@@ -46,7 +48,14 @@ def cookie_dir() -> Path:
             if cache
             else Path(__file__).resolve().parent.parent / "cookies"
         )
-    p.mkdir(exist_ok=True)
+        try:
+            p.mkdir(parents=True, exist_ok=True)
+        except OSError:
+            logger.warning(
+                "could not create cookie dir %s; falling back to repo-tree cookies/", p
+            )
+            p = Path(__file__).resolve().parent.parent / "cookies"
+    p.mkdir(parents=True, exist_ok=True)
     (p / ".gitkeep").touch(exist_ok=True)
     # Mark the cookies dir private if possible (POSIX); no-op on Windows.
     try:
@@ -90,10 +99,12 @@ def _reload_for_recaptcha(page, source: str, reloads: list) -> None:
         return
     try:
         if recaptcha_error(page):
-            print(
-                f"[{source}] reCAPTCHA failed to load - reloading page (attempts left: {reloads[0]}). "
-                f"If this is a Google sign-in popup and the error keeps returning, close the popup "
-                f"and log in with email + password instead of Google."
+            logger.info(
+                "[%s] reCAPTCHA failed to load - reloading page (attempts left: %s). "
+                "If this is a Google sign-in popup and the error keeps returning, close the popup "
+                "and log in with email + password instead of Google.",
+                source,
+                reloads[0],
             )
             page.reload(timeout=60000, wait_until="domcontentloaded")
             reloads[0] -= 1
@@ -111,7 +122,7 @@ def wait_for_login(page, source: str, url: str, is_login_wall, timeout: int = 60
     (up to 3 times) to re-trigger a working challenge. Returns False after
     timeout. No console interaction needed - the run continues automatically.
     """
-    print(f"[{source}] browser open - please log in there. The run will continue automatically once done.")
+    logger.info("[%s] browser open - please log in there. The run will continue automatically once done.", source)
     reloads = [3]
     waited = 0
     while waited < timeout:
@@ -129,8 +140,8 @@ def wait_for_login(page, source: str, url: str, is_login_wall, timeout: int = 60
         except Exception as e:
             logger.debug("[%s] login wall check failed: %s", source, e)
         if waited % 30 == 0:
-            print(f"[{source}] still waiting for login... ({waited}s)")
-    print(f"[{source}] login wait timed out after {timeout}s")
+            logger.info("[%s] still waiting for login... (%ss)", source, waited)
+    logger.warning("[%s] login wait timed out after %ss", source, timeout)
     return False
 
 
@@ -141,7 +152,7 @@ def wait_for_captcha(page, source: str, timeout: int = 600) -> bool:
     times) to re-trigger the challenge. Returns True when solved, False on
     timeout. No console interaction.
     """
-    print(f"[{source}] CAPTCHA - please solve it in the browser window. The run will continue automatically once done.")
+    logger.info("[%s] CAPTCHA - please solve it in the browser window. The run will continue automatically once done.", source)
     reloads = [3]
     waited = 0
     while waited < timeout:
@@ -152,11 +163,11 @@ def wait_for_captcha(page, source: str, timeout: int = 600) -> bool:
             if detect_block(page) != "captcha":
                 return True
         except Exception as e:
-            print(f"[{source}] CAPTCHA check error: {e}")
+            logger.warning("[%s] CAPTCHA check error: %s", source, e)
             return False
         if waited % 30 == 0:
-            print(f"[{source}] still waiting for CAPTCHA... ({waited}s)")
-    print(f"[{source}] CAPTCHA wait timed out after {timeout}s")
+            logger.info("[%s] still waiting for CAPTCHA... (%ss)", source, waited)
+    logger.warning("[%s] CAPTCHA wait timed out after %ss", source, timeout)
     return False
 
 
@@ -224,7 +235,7 @@ def launch_stealth_context(
         else random.choice(UA_POOL)
     )
 
-    launch_opts = dict(
+    launch_opts: dict[str, Any] = dict(
         headless=headless,
         proxy=proxy_opts,
         viewport={"width": viewport[0], "height": viewport[1]},
@@ -254,10 +265,11 @@ def launch_stealth_context(
         context = p.chromium.launch_persistent_context(cpath, channel="chrome", **launch_opts)
     except Exception as e:
         if _REAL_PROFILE:
-            print(
-                f"[browser] could not open real Chrome profile ({e}). "
-                f"Close Chrome completely and rerun, or unset BROWSER_USER_DATA_DIR. "
-                f"Falling back to per-source profile."
+            logger.warning(
+                "could not open real Chrome profile (%s). "
+                "Close Chrome completely and rerun, or unset BROWSER_USER_DATA_DIR. "
+                "Falling back to per-source profile.",
+                e,
             )
             cpath = str(cookie_path(source))
             launch_opts["user_agent"] = ua
@@ -265,7 +277,7 @@ def launch_stealth_context(
             launch_opts["timezone_id"] = timezone_id
             context = p.chromium.launch_persistent_context(cpath, **launch_opts)
         else:
-            print(f"[browser] real Chrome unavailable ({e}); falling back to bundled Chromium")
+            logger.warning("real Chrome unavailable (%s); falling back to bundled Chromium", e)
             context = p.chromium.launch_persistent_context(cpath, **launch_opts)
     apply_stealth(context)
     return context

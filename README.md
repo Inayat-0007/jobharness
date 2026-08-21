@@ -5,12 +5,13 @@
 **On-demand job harvesting for freshers & early-career engineers — India-focused, source-verified, Telegram-delivered.**
 
 ![Python](https://img.shields.io/badge/Python-3.10%2B-3776AB?logo=python&logoColor=white)
-![Tests](https://img.shields.io/badge/tests-185%20passed-2ea44f)
-![Sources](https://img.shields.io/badge/sources-18%20adapters-8A2BE2)
+![Tests](https://img.shields.io/badge/tests-409%20passed-2ea44f)
+![CI](https://img.shields.io/github/actions/workflow/status/Inayat-0007/jobharness/ci.yml)
+![Sources](https://img.shields.io/badge/sources-19%20adapters-8A2BE2)
 ![Browser](https://img.shields.io/badge/browser-Playwright%20%2B%20stealth-45ba4b)
 ![License](https://img.shields.io/badge/license-private-FF6B6B)
 
-*Run it when you want fresh results: it pulls postings from 18 channels, extracts structured fields **from source content only** (zero hallucination), deduplicates across sources and runs, verifies every apply URL is still open, and delivers a styled HTML/CSV/JSON/**PDF** report plus **Telegram cards with clickable apply links**.*
+*Run it when you want fresh results: it pulls postings from 19 channels, extracts structured fields **from source content only** (zero hallucination), deduplicates across sources and runs, verifies every apply URL is still open, and delivers a styled HTML/CSV/JSON/**PDF** report plus **Telegram cards with clickable apply links**.*
 
 </div>
 
@@ -51,7 +52,7 @@ The result: hours of manual searching, missed openings at the exact companies yo
 
 | Pillar | What it does |
 |---|---|
-| **1. Multi-channel harvesting** | 18 source adapters: official APIs (Greenhouse, Lever, Adzuna, USAJobs), RSS feeds (RemoteOK, WeWorkRemotely, Remotive, Jobicy), LinkedIn's public guest API, employer career pages (rendered in a headless browser), and login-gated portals (LinkedIn, Naukri, Hirist, Indeed, Glassdoor, Internshala, Wellfound) with human-in-the-loop gates. |
+| **1. Multi-channel harvesting** | 19 source adapters: official APIs (Greenhouse, Lever, Adzuna, USAJobs), RSS feeds (RemoteOK, WeWorkRemotely, Remotive, Jobicy), LinkedIn's public guest API, employer career pages (rendered in a headless browser), and login-gated portals (LinkedIn, Naukri, Hirist, Indeed, Glassdoor, Internshala, Wellfound) with human-in-the-loop gates. |
 | **2. Zero-fabrication extraction** | Fields come from parsed HTML/JSON only. An optional LLM pass extracts/cleans fields from the source text with a prompt that **forbids invention** and forces `MISSING` for unknown values. |
 | **3. Verification** | Every apply URL is fetched (with redirects) — unreachable or "no longer accepting" pages are marked `CLOSED`, excluded from alerts, and never pushed. |
 | **4. Deduplication & identity** | Within-run collapse, cross-run fuzzy matching (Jaro-Winkler + blocking keys + domain gates), canonical job IDs, and a `canonical_job_id` hierarchy that survives re-posts and title rewrites. |
@@ -63,7 +64,7 @@ The result: hours of manual searching, missed openings at the exact companies yo
 
 ```mermaid
 flowchart TB
-    subgraph SOURCES["SOURCE LAYER (18 adapters)"]
+    subgraph SOURCES["SOURCE LAYER (19 adapters)"]
         A1["API / RSS<br/>Greenhouse · Lever · Adzuna · USAJobs<br/>RemoteOK · WeWorkRemotely · Remotive · Jobicy"]
         A2["LinkedIn Guest API<br/>public jobs endpoint · no login"]
         A3["Career Page Browser<br/>46 employer sites · headless render<br/>DOM anchors + JSON-LD + detail enrich"]
@@ -96,7 +97,7 @@ flowchart TB
 ```mermaid
 sequenceDiagram
     participant CLI as CLI / runner
-    participant AD as 18 adapters (parallel, 4 workers)
+    participant AD as 19 adapters (parallel, 4 workers)
     participant EX as Extractor
     participant MT as Matcher
     participant VF as Verifier
@@ -299,7 +300,7 @@ jobharness/
 ├── report.py                   # HTML/CSV/JSON + PDF (A4)
 ├── dashboard.py                # all-runs aggregation page
 ├── dedupe.py                   # SQLite v3 store, blocking keys, fuzzy merge
-├── sources/                    # 18 adapters (api/, rss/, career_page/, gated, guest)
+├── sources/                    # 19 adapters (api/, rss/, career_page/, gated, guest)
 ├── scoring/                    # identity × authenticity × match + decision engine
 ├── evidence/                   # source statuses, positive/negative signals, reasons
 ├── identity/                   # company/title/location normalization, posting IDs
@@ -316,7 +317,9 @@ jobharness/
 python -m pytest tests\ -q
 ```
 
-**185 offline tests** (no network needed): zero-hallucination extraction, adapter parsers (RemoteOK, LinkedIn guest), dedupe + v1→v2→v3 migration + retention pruning, verifier CLOSED/confidence/domain logic, freshness date parsing, JobPosting JSON-LD parser, strict matcher location rules, browser login/CAPTCHA gate polling, report generation + escaping, dashboard builder, full end-to-end pipeline, cross-run fuzzy dedup, identity/posting-ID extraction, evidence signals + source statuses, BM25 matching + decision engine, evaluation metrics.
+**397 offline tests** (no network needed): zero-hallucination extraction, adapter parsers (RemoteOK, LinkedIn guest), dedupe + v1→v2→v3 migration + retention pruning, verifier CLOSED/confidence/domain logic, freshness date parsing, JobPosting JSON-LD parser, strict matcher location rules, browser login/CAPTCHA gate polling, report generation + escaping, dashboard builder, full end-to-end pipeline, cross-run fuzzy dedup, identity/posting-ID extraction, evidence signals + source statuses, BM25 matching + decision engine, evaluation metrics.
+
+Tests that need a real browser, the ML extra or live network are marked `browser` / `ml` / `integration` (registered in `pyproject.toml` + `tests/conftest.py`); CI runs the offline suite via `pytest -m "not browser and not ml and not integration"`.
 
 ---
 
@@ -328,12 +331,16 @@ python -m pytest tests\ -q
 4. **Score thresholds are untuned heuristics** — `AUTO_ACCEPT/REVIEW` boundaries are starting points; Phase-4 labeled data is required to calibrate them.
 5. **Windows-first** — `browser.py` chmod is a no-op on win32; human gates poll the browser (auto-continue) rather than blocking on `input()`.
 6. **Lever API is deprecated** — every board slug returns 404; the adapter is disabled in the production profile (kept for potential API revival).
-7. **No lint/typecheck config** — pytest only; ruff/mypy on the roadmap.
+7. **CI runs the offline suite only** — ruff, mypy and pytest run in GitHub Actions on every push/PR; tests marked `browser`/`ml`/`integration` need a real browser, the ml extra or live network, so they are excluded from CI.
 8. **Headed browser constraints** — gated portals run on your machine only (human gates cannot run on a server).
 
 ---
 
 ## 📜 Changelog — What Was Fixed & Improved
+
+**V3 — speed, reliability & CI (shipped):**
+- **Shipped (V3):** shared pooled `httpx.Client` (`fetcher.get_shared_client`); verify retry (2 retries, exponential backoff) marking transient failures `DEGRADED` instead of false CLOSED; SQLite WAL + 30 s `busy_timeout` + batched commits (`COMMIT_EVERY=50`) + end-of-run `wal_checkpoint`; CLOSED→AUTHENTIC re-alerts (`re_alerted` flag); punctuation-safe hashing (C++ ≠ C#, Node.js ≡ Nodejs); relative date parsing ("2 days ago"); matcher regexes precompiled and cached on the profile; typed source error statuses propagated from gated adapters; logging subsystem (`jobharness/logging.py` — console + rotating file); CLI exit codes (0/1/2); pytest markers `browser`/`ml`/`integration` + shared `tests/conftest.py` fixtures (`tmp_profile`, `clear_env`, `sample_job`); GitHub Actions CI (ruff, mypy, pytest on Python 3.10–3.13).
+- **Tests:** 185 → 397 (51 test files)
 
 **Latest (India fresher pipeline):**
 - **Fixed:** infinite recursion in `browser.py:cookie_dir()` (crashed every browser adapter)
@@ -355,7 +362,6 @@ python -m pytest tests\ -q
 - [ ] Phase-4 calibration: labeled dataset → tuned thresholds (`evaluation/benchmark`)
 - [ ] Incremental mode (`--since`) + scheduler wrapper for true automation
 - [ ] Description backfill for pre-v3 rows from stored reports
-- [ ] ruff/mypy in the `dev` extra
 - [ ] Dashboard polish: CSV export of filtered views, per-run comparison, dark theme
 - [ ] Deep-crawl career pages (pagination, per-site card selectors)
 

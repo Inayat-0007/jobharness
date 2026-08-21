@@ -10,7 +10,8 @@ def negative_signals(job, verify_result=None) -> list[str]:
     """Negative authenticity signals (proposal §17). verify_result is an
     optional dict from verify() with keys: status_code, blocked, closed_marker,
     redirect_to, captcha, position_filled. Feature-derived fallbacks apply
-    when it is absent."""
+    when it is absent. A job marked DEGRADED by verify() (transient retries
+    exhausted) also emits "verification_unreachable"."""
     sig: list[str] = []
     ctx = verify_result or {}
     status_code = ctx.get("status_code")
@@ -48,5 +49,17 @@ def negative_signals(job, verify_result=None) -> list[str]:
         sig.append("captcha_required")
     elif ctx.get("blocked"):
         sig.append("blocked_response")
+
+    # DEGRADED and _UNREACHABLE_SIGNAL live in jobharness/verify.py
+    # (_mark_degraded). Imported lazily inside the function so this module
+    # never participates in a verify<->evidence import cycle; verify.py only
+    # imports evidence.source, but lazy import keeps us safe even if that
+    # changes. The signal is tied to the DEGRADED status, not the ctx alone:
+    # a retry ctx ({"retries": N} / {"error": ...}) on a non-DEGRADED job
+    # must not emit it.
+    from ..verify import _UNREACHABLE_SIGNAL, DEGRADED
+
+    if getattr(job, "authentic_status", "") == DEGRADED:
+        sig.append(_UNREACHABLE_SIGNAL)
 
     return sig

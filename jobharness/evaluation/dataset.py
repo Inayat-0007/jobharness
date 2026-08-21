@@ -91,7 +91,7 @@ def _positive_pairs(rng: random.Random, count: int) -> list[dict]:
     """Synthetic rewrites of base jobs (title rewords, company aliases,
     location variants, occasional description rewordings)."""
     bases = _base_jobs()
-    pairs = []
+    pairs: list[dict] = []
     while len(pairs) < count:
         base = rng.choice(bases)
         title_v = rng.choice(TITLE_REWORDS[base["title"]])
@@ -111,7 +111,7 @@ def _positive_pairs(rng: random.Random, count: int) -> list[dict]:
 
 def _negative_pairs(rng: random.Random, count: int) -> list[dict]:
     jobs = _base_jobs()
-    pairs = []
+    pairs: list[dict] = []
     while len(pairs) < count:
         x, y = rng.sample(jobs, 2)
         if x["title"].split()[0] == y["title"].split()[0] and x["company"] == y["company"]:

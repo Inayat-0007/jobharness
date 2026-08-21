@@ -73,3 +73,45 @@ def test_location_india_allows_unknown():
 def test_location_remote_allowed_when_profile_remote():
     p = base_profile(location="India", remote=True)
     assert matches_profile(make_job(title="Backend Engineer", location="Remote", desc="python"), p) is True
+
+
+def test_empty_description_without_keyword_or_role_rejected():
+    # Deliberate change: an empty description must NOT bypass the keyword gate.
+    p = base_profile(keywords=["python"], roles=["Backend Engineer"])
+    j = make_job(title="Marketing Lead", company="Acme", desc="")
+    assert matches_profile(j, p) is False
+
+
+def test_empty_description_keyword_in_title_accepted():
+    p = base_profile(keywords=["python"], roles=["Backend Engineer"])
+    j = make_job(title="Backend Engineer (Python)", company="Acme", desc="")
+    assert matches_profile(j, p) is True
+
+
+def test_empty_description_role_in_title_accepted():
+    p = base_profile(keywords=["python"], roles=["Backend Engineer"])
+    j = make_job(title="Backend Engineer", company="Acme", desc="")
+    assert matches_profile(j, p) is True
+
+
+def test_empty_description_keyword_in_company_accepted():
+    p = base_profile(keywords=["python"], roles=[])
+    j = make_job(title="Developer", company="Python Corp", desc="")
+    assert matches_profile(j, p) is True
+
+
+def test_empty_description_keyword_in_tech_stack_accepted():
+    p = base_profile(keywords=["python"], roles=[])
+    j = make_job(title="Developer", company="Acme", desc="")
+    j.tech_stack_keywords = ["python"]
+    assert matches_profile(j, p) is True
+
+
+def test_compiled_patterns_cached_on_profile():
+    p = base_profile()
+    assert matches_profile(make_job(), p) is True
+    cached = getattr(p, "_compiled_patterns", None)
+    assert cached is not None
+    assert set(cached) == {"roles", "keywords", "excludes"}
+    assert matches_profile(make_job(title="Marketing Lead", desc="java spring"), p) is False
+    assert p._compiled_patterns is cached
