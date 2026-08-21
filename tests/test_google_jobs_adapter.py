@@ -3,7 +3,7 @@ from __future__ import annotations
 from unittest import mock
 
 from jobharness.profile import Profile
-from jobharness.sources.google_jobs import GoogleJobsAdapter, GOOGLE_JOBS_URL
+from jobharness.sources.google_jobs import GoogleJobsAdapter
 
 LD_HTML = """
 <html><head>
@@ -82,9 +82,7 @@ def test_google_jobs_clean_page_empty():
 
 
 def test_google_jobs_query_encoding():
-    """Query terms must be URL-safe in the google search URL."""
-    from jobharness.sources.google_jobs import GOOGLE_JOBS_URL
-
+    """Query terms must be URL-encoded in the google search URL."""
     prof = Profile(roles=["Backend Engineer"], keywords=["python api"], remote=True)
     adapter = GoogleJobsAdapter()
 
@@ -107,6 +105,8 @@ def test_google_jobs_query_encoding():
     ctx = Ctx()
     with mock.patch("jobharness.sources.google_jobs.make_client", return_value=ctx):
         with mock.patch("jobharness.sources.google_jobs.random_delay"):
-            adapter._fetch_once("Backend+Engineer+python+api")
-    # spaces in keyword lists must not produce raw spaces in the query URL
+            with mock.patch("jobharness.sources.google_jobs.time.sleep"):
+                adapter.fetch(prof)
+    # spaces in keyword lists must be encoded, not raw in the query URL
     assert " " not in ctx.calls[0]
+    assert "python+api" in ctx.calls[0]

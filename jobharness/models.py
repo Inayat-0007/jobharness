@@ -3,14 +3,14 @@ from __future__ import annotations
 import hashlib
 import re
 import time
-from dataclasses import dataclass, field, asdict
-from typing import Optional
+from dataclasses import asdict, dataclass, field
 
-from .algo import normalize_company, description_fingerprint as _description_fingerprint
+from .algo import description_fingerprint as _description_fingerprint
+from .algo import normalize_company
 from .scoring.thresholds import REQUIRED_JOB_FIELDS
 
 
-def _norm(text: Optional[str]) -> str:
+def _norm(text: str | None) -> str:
     if not text:
         return ""
     text = text.strip().lower()
@@ -35,12 +35,12 @@ class RawJob:
     source_name: str
     source_url: str
     title: str
-    company: Optional[str] = None
-    location: Optional[str] = None
-    description: Optional[str] = None
-    posted_date: Optional[str] = None
-    apply_url: Optional[str] = None
-    raw_html: Optional[str] = None
+    company: str | None = None
+    location: str | None = None
+    description: str | None = None
+    posted_date: str | None = None
+    apply_url: str | None = None
+    raw_html: str | None = None
     extra: dict = field(default_factory=dict)
 
 

@@ -1,10 +1,10 @@
 from __future__ import annotations
 
-from ..base import SourceAdapter
-from ..exceptions import ParseFailureError
+from ...fetcher import make_client, random_delay
 from ...models import RawJob
 from ...profile import Profile
-from ...fetcher import make_client, random_delay
+from ..base import SourceAdapter
+from ..exceptions import ParseFailureError
 
 
 class GreenhouseAdapter(SourceAdapter):

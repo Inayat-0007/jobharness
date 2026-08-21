@@ -1,6 +1,6 @@
 from __future__ import annotations
 
-from jobharness.models import freshness_label, MISSING
+from jobharness.models import MISSING, freshness_label
 
 
 def test_freshness_rfc2822():

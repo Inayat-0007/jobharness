@@ -1,19 +1,15 @@
 from __future__ import annotations
 
 import hashlib
+import importlib.util
 import math
 import re
 import time as _time
 from urllib.parse import urlsplit
 
-# Guarded optional accelerator: rapidfuzz is NOT a hard dependency. When absent
+# Optional accelerator probe: rapidfuzz is NOT a hard dependency. When absent
 # (the common case) every algorithm below is pure Python and behavior-identical.
-try:
-    from rapidfuzz import fuzz as _rapidfuzz_fuzz  # type: ignore
-
-    _HAS_RAPIDFUZZ = True
-except ImportError:
-    _HAS_RAPIDFUZZ = False
+_HAS_RAPIDFUZZ = importlib.util.find_spec("rapidfuzz") is not None
 
 # Centralized thresholds. Never scatter these numbers in runner/verify/matcher.
 TITLE_FLOOR = 0.75

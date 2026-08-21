@@ -2,8 +2,6 @@ from __future__ import annotations
 
 from unittest import mock
 
-import pytest
-
 from jobharness.profile import Profile
 from jobharness.sources.rss.jobicy import JobicyAdapter
 

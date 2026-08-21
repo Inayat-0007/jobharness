@@ -8,8 +8,7 @@ import time
 from contextlib import contextmanager, nullcontext
 from pathlib import Path
 
-from . import secrets
-from .fetcher import pick_proxy, UA_POOL
+from .fetcher import UA_POOL, pick_proxy
 
 logger = logging.getLogger(__name__)
 

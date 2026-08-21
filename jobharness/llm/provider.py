@@ -2,12 +2,10 @@ from __future__ import annotations
 
 import json
 import re
-from typing import Optional
 
 import httpx
 
 from .. import secrets
-
 
 PROVIDER_ENV = {
     "gemini": ("GEMINI_API_KEY", "GEMINI_BASE_URL", "GEMINI_MODEL"),
@@ -34,7 +32,7 @@ def complete(prompt: str, schema_hint: str = "", provider: str = "gemini", max_t
     Raises RuntimeError if all providers are unavailable / unconfigured.
     """
     order = [provider] + [p for p in DEFAULT_FALLBACK if p != provider]
-    last_err: Optional[str] = None
+    last_err: str | None = None
     for name in order:
         api_key, base_url, model = _provider_cfg(name)
         if not api_key or not base_url or not model:

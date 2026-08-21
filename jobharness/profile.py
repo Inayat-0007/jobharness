@@ -2,7 +2,6 @@ from __future__ import annotations
 
 from dataclasses import dataclass, field
 from pathlib import Path
-from typing import Optional, List
 
 import yaml
 
@@ -16,7 +15,7 @@ class Profile:
     location: str = ""
     remote: bool = True
     seniority: str = ""                                # e.g. "mid", "senior", "junior"
-    salary_floor: Optional[int] = None
+    salary_floor: int | None = None
     company_allowlist: list = field(default_factory=list)  # DEPRECATED alias -> greenhouse/lever boards
     greenhouse_boards: list = field(default_factory=list)   # list[str] of Greenhouse board slugs
     lever_boards: list = field(default_factory=list)         # list[str] of Lever board slugs

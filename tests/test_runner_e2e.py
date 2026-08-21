@@ -2,10 +2,9 @@ from __future__ import annotations
 
 from unittest import mock
 
+import jobharness.sources.api.remoteok as remoteok_mod
 from jobharness import runner
 from jobharness.models import RawJob
-
-import jobharness.sources.api.remoteok as remoteok_mod
 
 
 def make_raw():

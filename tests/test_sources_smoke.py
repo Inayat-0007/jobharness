@@ -1,21 +1,17 @@
 from __future__ import annotations
 
-from unittest import mock
-
-import pytest
-
 from jobharness.browser import detect_block
-from jobharness.sources.internshala import InternshalaAdapter
-from jobharness.sources.naukri import NaukriAdapter
-from jobharness.sources.hirist import HiristAdapter
-from jobharness.sources.wellfound import WellfoundAdapter
-from jobharness.sources.linkedin import LinkedInAdapter
-from jobharness.sources.indeed import IndeedAdapter
-from jobharness.sources.glassdoor import GlassdoorAdapter
-from jobharness.sources.career_page.generic import GenericCareerPageAdapter
-from jobharness.sources.career_page.browser_generic import CareerPageBrowserAdapter
-from jobharness.sources.linkedin_guest import LinkedInGuestAdapter
 from jobharness.profile import Profile
+from jobharness.sources.career_page.browser_generic import CareerPageBrowserAdapter
+from jobharness.sources.career_page.generic import GenericCareerPageAdapter
+from jobharness.sources.glassdoor import GlassdoorAdapter
+from jobharness.sources.hirist import HiristAdapter
+from jobharness.sources.indeed import IndeedAdapter
+from jobharness.sources.internshala import InternshalaAdapter
+from jobharness.sources.linkedin import LinkedInAdapter
+from jobharness.sources.linkedin_guest import LinkedInGuestAdapter
+from jobharness.sources.naukri import NaukriAdapter
+from jobharness.sources.wellfound import WellfoundAdapter
 
 
 def test_adapters_import():

@@ -4,7 +4,7 @@ import csv
 import json
 from pathlib import Path
 
-from jobharness.models import Job, VALID_AUTHENTIC, CLOSED
+from jobharness.models import CLOSED, VALID_AUTHENTIC, Job
 from jobharness.report import write_reports
 
 

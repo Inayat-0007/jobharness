@@ -5,12 +5,14 @@ import time
 import httpx
 
 from . import algo
-from .models import Job, CLOSED, MISSING, _parse_date, freshness_label
-from .fetcher import make_client, blocked_response, resp_text
-from .urlutil import apply_url_domain as _domain
+from .evidence.source import source_authority
+from .fetcher import blocked_response, make_client, resp_text
+from .models import CLOSED, MISSING, Job, _parse_date, freshness_label
 from .scoring.authenticity import authenticity_score as _authenticity_score
 from .scoring.thresholds import (
     REJECT as _REJECT_DECISION,
+)
+from .scoring.thresholds import (
     SCORE_ATS_BOOST,
     SCORE_ATS_MIN_AUTHORITY,
     SCORE_BLOCKED_CAP,
@@ -24,7 +26,7 @@ from .scoring.thresholds import (
     SCORE_RECENT_BONUS,
     SCORE_STALE_PENALTY,
 )
-from .evidence.source import source_authority
+from .urlutil import apply_url_domain as _domain
 
 _company_domain_hint = algo.company_domain_hint
 

@@ -1,7 +1,5 @@
 from __future__ import annotations
 
-from unittest import mock
-
 from jobharness.sources.rss.remotive import _company_from_title
 
 

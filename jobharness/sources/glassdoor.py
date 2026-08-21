@@ -3,16 +3,16 @@ from __future__ import annotations
 import logging
 import time
 
-from .base import SourceAdapter
-from ..models import RawJob
-from ..profile import Profile
 from ..browser import (
-    open_browser,
-    wait_for_captcha,
     detect_block,
+    open_browser,
     scroll_to_load,
+    wait_for_captcha,
     wait_for_selector_any,
 )
+from ..models import RawJob
+from ..profile import Profile
+from .base import SourceAdapter
 
 logger = logging.getLogger(__name__)
 
@@ -56,7 +56,7 @@ class GlassdoorAdapter(SourceAdapter):
                 if block == "captcha":
                     if not wait_for_captcha(page, self.name, timeout=600):
                         if not mobile:
-                            raise RuntimeError(f"captcha wait timed out")
+                            raise RuntimeError("captcha wait timed out")
                         return out
                     time.sleep(3)
                 else:

@@ -1,10 +1,10 @@
 from __future__ import annotations
 
-from jobharness.models import Job, CLOSED, VALID_AUTHENTIC
-from jobharness.evidence.positive import positive_signals
 from jobharness.evidence.negative import negative_signals
+from jobharness.evidence.positive import positive_signals
 from jobharness.evidence.reason import compose_reasons, reason_text
-from jobharness.evidence.source import SOURCE_AUTHORITY, source_authority, SourceStatus
+from jobharness.evidence.source import SOURCE_AUTHORITY, SourceStatus, source_authority
+from jobharness.models import CLOSED, VALID_AUTHENTIC, Job
 from jobharness.scoring.authenticity import authenticity_score
 
 

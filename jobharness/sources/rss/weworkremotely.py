@@ -2,11 +2,10 @@ from __future__ import annotations
 
 import feedparser
 
-from ..base import SourceAdapter
+from ...fetcher import make_client
 from ...models import RawJob
 from ...profile import Profile
-from ...fetcher import make_client
-
+from ..base import SourceAdapter
 
 WWR_CATEGORIES = {
     "engineering": "https://weworkremotely.com/categories/remote-back-end-programming-jobs.rss",

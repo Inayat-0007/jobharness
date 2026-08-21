@@ -1,12 +1,11 @@
 from __future__ import annotations
 
 from ... import secrets
-from ..base import SourceAdapter
-from ..exceptions import ParseFailureError, BlockedError
+from ...fetcher import blocked_response, make_client, random_delay
 from ...models import RawJob
 from ...profile import Profile
-from ...fetcher import make_client, blocked_response, random_delay
-
+from ..base import SourceAdapter
+from ..exceptions import BlockedError, ParseFailureError
 
 COUNTRY_NAMES = {
     "in": "India",

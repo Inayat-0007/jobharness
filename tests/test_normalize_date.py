@@ -1,7 +1,7 @@
 from __future__ import annotations
 
 from jobharness.extractor import normalize_date
-from jobharness.models import freshness_label, _parse_date
+from jobharness.models import _parse_date, freshness_label
 
 
 def test_normalize_date_iso_with_z():

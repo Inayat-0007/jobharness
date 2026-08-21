@@ -2,8 +2,8 @@ from __future__ import annotations
 
 import sqlite3
 
-from jobharness.dedupe import DedupeStore, SCHEMA_VERSION
-from jobharness.models import Job, VALID_AUTHENTIC, CLOSED
+from jobharness.dedupe import SCHEMA_VERSION, DedupeStore
+from jobharness.models import CLOSED, VALID_AUTHENTIC, Job
 
 
 def make_job(source="remoteok"):

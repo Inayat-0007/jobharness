@@ -1,8 +1,8 @@
 from __future__ import annotations
 
+from jobharness.matcher import matches_profile
 from jobharness.models import Job
 from jobharness.profile import Profile
-from jobharness.matcher import matches_profile
 from jobharness.scoring.matching import score_match, skill_normalize
 
 

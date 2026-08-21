@@ -329,7 +329,6 @@ class DedupeStore:
             return result
         best = None
         best_s = 0.0
-        best_hint = ""
         for row in candidates:
             if job.job_id_hash and row["job_id_hash"] == job.job_id_hash:
                 best = ("exact", row, 1.0, "AUTO_ACCEPT")
@@ -356,7 +355,6 @@ class DedupeStore:
             if s > best_s:
                 best_s = s
                 best = ("fuzzy", row, s, hint)
-                best_hint = hint
         via, row, score, hint = best
         result["identity_score"] = score
         result["possible_duplicate_of"] = row["job_id_hash"]

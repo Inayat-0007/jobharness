@@ -1,8 +1,8 @@
 from __future__ import annotations
 
 from .authenticity import authenticity_score
-from .matching import score_match, skill_normalize
 from .decision import decide
+from .matching import score_match, skill_normalize
 from .thresholds import (
     AUTO_ACCEPT,
     AUTO_ACCEPT_AUTHENTICITY,

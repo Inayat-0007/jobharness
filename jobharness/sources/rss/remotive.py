@@ -4,11 +4,10 @@ import re
 
 import feedparser
 
-from ..base import SourceAdapter
+from ...fetcher import make_client
 from ...models import RawJob
 from ...profile import Profile
-from ...fetcher import make_client
-
+from ..base import SourceAdapter
 
 _COMPANY_TITLE_RE = re.compile(r"^(?P<company>.+?)\s*[-\u2013]\s*(?P<title>.+)$")
 

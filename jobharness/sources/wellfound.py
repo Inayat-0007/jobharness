@@ -3,17 +3,17 @@ from __future__ import annotations
 import random
 import time
 
-from .base import SourceAdapter
-from .exceptions import RateLimitedError
-from ..models import RawJob
-from ..profile import Profile
 from ..browser import (
-    open_browser,
-    wait_for_captcha,
     detect_block,
+    open_browser,
     scroll_to_load,
+    wait_for_captcha,
     wait_for_selector_any,
 )
+from ..models import RawJob
+from ..profile import Profile
+from .base import SourceAdapter
+from .exceptions import RateLimitedError
 
 
 class WellfoundAdapter(SourceAdapter):

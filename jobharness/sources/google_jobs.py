@@ -3,13 +3,12 @@ from __future__ import annotations
 import time
 import urllib.parse
 
-from .base import SourceAdapter
-from .exceptions import BlockedError
+from ..fetcher import blocked_response, make_client, random_delay, resp_text
 from ..models import RawJob
 from ..profile import Profile
-from ..fetcher import make_client, blocked_response, random_delay, resp_text
-from .jobposting_ld import extract_jobpostings_from_html, extract_jobpostings_from_blob
-
+from .base import SourceAdapter
+from .exceptions import BlockedError
+from .jobposting_ld import extract_jobpostings_from_blob, extract_jobpostings_from_html
 
 GOOGLE_JOBS_URL = "https://www.google.com/search?q={query}&ibp=htl;jobs"
 

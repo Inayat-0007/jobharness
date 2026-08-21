@@ -3,18 +3,18 @@ from __future__ import annotations
 import logging
 import time
 
-from .base import SourceAdapter
-from .exceptions import AuthRequiredError, RateLimitedError
-from ..models import RawJob
-from ..profile import Profile
 from ..browser import (
+    detect_block,
     open_browser,
+    scroll_to_load,
     wait_for_captcha,
     wait_for_login,
-    detect_block,
-    scroll_to_load,
     wait_for_selector_any,
 )
+from ..models import RawJob
+from ..profile import Profile
+from .base import SourceAdapter
+from .exceptions import AuthRequiredError, RateLimitedError
 
 logger = logging.getLogger(__name__)
 

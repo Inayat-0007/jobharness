@@ -13,7 +13,7 @@ def duplicate_metrics(labels: list[int], scores: list[float], threshold: float) 
     """PRF of duplicate detection at a score threshold (score >= threshold ->
     predicted duplicate)."""
     tp = fp = fn = 0
-    for label, score in zip(labels, scores):
+    for label, score in zip(labels, scores, strict=False):
         pred = score >= threshold
         if pred and label == 1:
             tp += 1
@@ -31,7 +31,7 @@ def expected_calibration_error(labels: list[int], scores: list[float], bins: int
     edges = [i / bins for i in range(bins + 1)]
     total = 0.0
     weight_sum = 0
-    for lo, hi in zip(edges[:-1], edges[1:]):
+    for lo, hi in zip(edges[:-1], edges[1:], strict=False):
         idx = [i for i, s in enumerate(scores) if lo <= s < hi or (hi == 1.0 and s == 1.0)]
         if not idx:
             continue

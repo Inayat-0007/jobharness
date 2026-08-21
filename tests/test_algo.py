@@ -1,7 +1,7 @@
 from __future__ import annotations
 
 from jobharness import algo
-from jobharness.models import Job, CLOSED, VALID_AUTHENTIC
+from jobharness.models import CLOSED, VALID_AUTHENTIC, Job
 
 DESC = "we are looking for a backend engineer with python api experience"
 

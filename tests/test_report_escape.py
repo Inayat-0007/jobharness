@@ -2,7 +2,7 @@ from __future__ import annotations
 
 import html as _html
 
-from jobharness.models import Job, VALID_AUTHENTIC
+from jobharness.models import VALID_AUTHENTIC, Job
 from jobharness.report import write_reports
 
 _RAW = "<script>alert(1)</script>"

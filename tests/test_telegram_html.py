@@ -3,7 +3,7 @@ from __future__ import annotations
 import html as _html
 from unittest import mock
 
-from jobharness.models import Job, VALID_AUTHENTIC
+from jobharness.models import VALID_AUTHENTIC, Job
 from jobharness.notify import telegram
 
 

@@ -7,36 +7,33 @@ from collections import Counter
 from concurrent.futures import ThreadPoolExecutor, as_completed
 from pathlib import Path
 
-from . import secrets, algo
-from .models import Job, RawJob, MISSING, CLOSED
+from . import algo, secrets
+from .dedupe import DedupeStore
+from .evidence.negative import negative_signals
+from .evidence.positive import positive_signals
+from .evidence.reason import compose_reasons
+from .evidence.source import SourceStatus, source_authority
+from .extractor import extract
+from .identity.posting_id import extract_posting_id
+from .matcher import matches_profile
+from .models import CLOSED, MISSING, Job, RawJob
+from .notify import telegram
 from .profile import Profile
 from .registry import enabled_adapters
-from .extractor import extract
-from .matcher import matches_profile
-from .verify import verify
-from .dedupe import DedupeStore
-from .report import write_reports, write_pdf
-from .urlutil import canonicalize_url
-from .notify import telegram
-from .evidence.source import SourceStatus, source_authority
-from .evidence.positive import positive_signals
-from .evidence.negative import negative_signals
-from .evidence.reason import compose_reasons
-from .identity.posting_id import extract_posting_id
-from .sources.exceptions import (
-    RateLimitedError,
-    AuthRequiredError,
-    SourceDownError,
-    ParseFailureError,
-    BlockedError,
-)
-
-
-from .scoring.matching import score_match
-from .scoring.decision import decide
+from .report import write_pdf, write_reports
 from .scoring.authenticity import authenticity_score as _authenticity_score
-from .scoring.thresholds import STATE_OPEN, STATE_CLOSED, STATE_INVALID_URL
-
+from .scoring.decision import decide
+from .scoring.matching import score_match
+from .scoring.thresholds import STATE_CLOSED, STATE_INVALID_URL, STATE_OPEN
+from .sources.exceptions import (
+    AuthRequiredError,
+    BlockedError,
+    ParseFailureError,
+    RateLimitedError,
+    SourceDownError,
+)
+from .urlutil import canonicalize_url
+from .verify import verify
 
 # Safety cap: never make more than this many LLM extraction calls per run.
 DEFAULT_LLM_BUDGET = 200

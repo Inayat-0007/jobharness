@@ -1,7 +1,7 @@
 from __future__ import annotations
 
-from jobharness.models import RawJob, MISSING
 from jobharness import extractor
+from jobharness.models import RawJob
 
 
 def make_raw(**kw):

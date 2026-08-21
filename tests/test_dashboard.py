@@ -1,10 +1,7 @@
 from __future__ import annotations
 
-import json
-from pathlib import Path
-
 from jobharness.dashboard import build_dashboard, collect_reports, compute_stats, description_text
-from jobharness.models import Job, VALID_AUTHENTIC, CLOSED
+from jobharness.models import CLOSED, VALID_AUTHENTIC, Job
 from jobharness.report import write_reports
 
 
@@ -78,7 +75,7 @@ def test_description_text_strips_tags():
 
 def test_dashboard_escapes_closing_script_in_json(tmp_path):
     """Embedded JSON must not contain a raw </script> (XSS in <script> block)."""
-    from jobharness.models import Job, VALID_AUTHENTIC
+    from jobharness.models import VALID_AUTHENTIC, Job
     from jobharness.report import write_reports
 
     j = Job(title='Backend </script><script>alert(1)</script> Engineer', company='Acme', location='Remote')

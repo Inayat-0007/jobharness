@@ -1,7 +1,6 @@
 from __future__ import annotations
 
-import json
-from unittest import mock
+import pytest
 
 from jobharness.llm import provider as llm
 
@@ -45,7 +44,6 @@ def test_extract_json_fenced_array():
 
 def test_provider_fallback_chain(monkeypatch):
     """When the requested provider is unconfigured, fall through to others."""
-    calls = []
 
     def fake_cfg(name):
         if name == "gemini":
@@ -66,16 +64,10 @@ def test_provider_fallback_chain(monkeypatch):
 def test_provider_all_unconfigured_raises(monkeypatch):
     monkeypatch.setattr(llm, "_provider_cfg", lambda n: ("", "", ""))
     monkeypatch.setattr(llm, "DEFAULT_FALLBACK", ["gemini"])
-    try:
+    with pytest.raises(RuntimeError, match="All LLM providers failed"):
         llm.complete("test", provider="gemini")
-        assert False, "should have raised"
-    except RuntimeError as e:
-        assert "All LLM providers failed" in str(e)
 
 
 def test_provider_unknown_raises(monkeypatch):
-    try:
+    with pytest.raises(ValueError, match="Unknown LLM provider"):
         llm.complete("test", provider="nonexistent")
-        assert False, "should have raised"
-    except ValueError as e:
-        assert "Unknown LLM provider" in str(e)

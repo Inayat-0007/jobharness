@@ -1,5 +1,3 @@
-from __future__ import annotations
-
 """JSONL labeled-pair dataset for dedup evaluation.
 
 Format per line:
@@ -12,6 +10,8 @@ jobs (title rewords, company aliases, location variants, description
 rewordings); negative pairs are genuinely different jobs. Fully offline and
 deterministic (fixed seed) — extend with manually labeled real pairs.
 """
+
+from __future__ import annotations
 
 import json
 import random

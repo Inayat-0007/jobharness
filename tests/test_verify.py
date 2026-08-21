@@ -2,8 +2,8 @@ from __future__ import annotations
 
 from unittest import mock
 
-from jobharness.models import Job, CLOSED, VALID_AUTHENTIC
 from jobharness import verify
+from jobharness.models import CLOSED, VALID_AUTHENTIC, Job
 
 
 def make_job(url="https://acme.com/careers/1"):

@@ -3,8 +3,8 @@ from __future__ import annotations
 import sqlite3
 
 from jobharness import algo
-from jobharness.dedupe import DedupeStore, SCHEMA_VERSION
-from jobharness.models import Job, VALID_AUTHENTIC
+from jobharness.dedupe import SCHEMA_VERSION, DedupeStore
+from jobharness.models import VALID_AUTHENTIC, Job
 
 V3_COLUMNS = [
     "canonical_job_id", "block_key", "possible_duplicate_of", "identity_score",

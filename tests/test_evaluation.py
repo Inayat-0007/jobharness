@@ -1,9 +1,13 @@
 from __future__ import annotations
 
+from jobharness.evaluation.calibration import calibrate, platt_scale
 from jobharness.evaluation.dataset import generate_dataset, load_dataset
-from jobharness.evaluation.metrics import precision_recall_f1, duplicate_metrics, expected_calibration_error
-from jobharness.evaluation.calibration import platt_scale, calibrate
 from jobharness.evaluation.fellegi_sunter import m_u_estimates, pair_weight
+from jobharness.evaluation.metrics import (
+    duplicate_metrics,
+    expected_calibration_error,
+    precision_recall_f1,
+)
 
 
 def test_dataset_generation_counts():

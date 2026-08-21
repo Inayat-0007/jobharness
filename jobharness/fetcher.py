@@ -2,12 +2,10 @@ from __future__ import annotations
 
 import random
 import time
-from typing import Optional
 
 import httpx
 
 from . import secrets
-
 
 UA_POOL = [
     "Mozilla/5.0 (Windows NT 10.0; Win64; x64) AppleWebKit/537.36 (KHTML, like Gecko) Chrome/124.0.0.0 Safari/537.36",
@@ -16,7 +14,7 @@ UA_POOL = [
 ]
 
 
-def pick_proxy() -> Optional[str]:
+def pick_proxy() -> str | None:
     proxies = secrets.proxy_list()
     if not proxies:
         return None

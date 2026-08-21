@@ -6,10 +6,10 @@ import time
 from concurrent.futures import ThreadPoolExecutor, as_completed
 from urllib.parse import urlparse, urlunparse
 
-from .base import SourceAdapter
+from ..fetcher import make_client, random_delay, resp_text
 from ..models import RawJob
 from ..profile import Profile
-from ..fetcher import make_client, random_delay, resp_text
+from .base import SourceAdapter
 
 _LI_UA = (
     "Mozilla/5.0 (Windows NT 10.0; Win64; x64) AppleWebKit/537.36 "

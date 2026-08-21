@@ -1,14 +1,12 @@
 from __future__ import annotations
 
 import argparse
-import sys
 from pathlib import Path
 
 from . import secrets
 from .dashboard import build_dashboard
 from .profile import load_profile, make_demo_profile
-from .runner import run_once, DEFAULT_LLM_BUDGET
-
+from .runner import DEFAULT_LLM_BUDGET, run_once
 
 PROJECT_ROOT = Path(__file__).resolve().parent.parent
 

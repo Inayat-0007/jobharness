@@ -5,13 +5,12 @@ import re
 import time
 from concurrent.futures import ThreadPoolExecutor, as_completed
 
-from ..base import SourceAdapter
-from ...models import RawJob
-from ...profile import Profile
 from ...browser import open_browser
 from ...fetcher import make_client, random_delay
+from ...models import RawJob
+from ...profile import Profile
+from ..base import SourceAdapter
 from ..jobposting_ld import extract_jobpostings_from_html
-
 
 JOB_HREF_RE = re.compile(r"/(job|jobs|position|positions|requisition|opening|vacancy)/", re.I)
 NAV_TEXTS = (

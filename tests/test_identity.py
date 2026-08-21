@@ -1,13 +1,13 @@
 from __future__ import annotations
 
-from jobharness.models import Job
 from jobharness.identity import (
-    extract_posting_id,
     company_identity,
+    extract_posting_id,
     location_bucket,
     normalize_title,
     title_stem,
 )
+from jobharness.models import Job
 
 
 def make_job(source, url):

@@ -1,6 +1,7 @@
 from __future__ import annotations
 
-from ..algo import normalize_text, title_stem as _algo_title_stem
+from ..algo import normalize_text
+from ..algo import title_stem as _algo_title_stem
 
 
 def normalize_title(title) -> str:

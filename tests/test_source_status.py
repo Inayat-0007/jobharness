@@ -3,18 +3,17 @@ from __future__ import annotations
 from unittest import mock
 
 from jobharness import runner
-from jobharness.fetcher import classify_response
 from jobharness.evidence.source import SourceStatus
+from jobharness.fetcher import classify_response
+from jobharness.models import RawJob
 from jobharness.sources.base import SourceAdapter
 from jobharness.sources.exceptions import (
-    RateLimitedError,
     AuthRequiredError,
-    SourceDownError,
-    ParseFailureError,
     BlockedError,
+    ParseFailureError,
+    RateLimitedError,
+    SourceDownError,
 )
-from jobharness.models import RawJob
-from jobharness.profile import Profile
 
 
 class _Resp:

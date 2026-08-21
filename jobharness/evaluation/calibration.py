@@ -1,11 +1,11 @@
-from __future__ import annotations
-
 """Probability calibration (Platt scaling) with pure-Python gradient descent.
 
 Phase 4 experiment module. NOT wired into the production path until the
 labeled dataset exists and benchmark results justify it. scikit-learn is only
 an optional `ml` extra; this module works without it.
 """
+
+from __future__ import annotations
 
 import math
 
@@ -28,7 +28,7 @@ def platt_scale(labels: list[int], scores: list[float], iters: int = 300, lr: fl
     n = max(1, len(xs))
     for _ in range(iters):
         ga = gb = 0.0
-        for x, y in zip(xs, labels):
+        for x, y in zip(xs, labels, strict=False):
             p = _sigmoid(a * x + b)
             ga += (p - y) * x
             gb += p - y

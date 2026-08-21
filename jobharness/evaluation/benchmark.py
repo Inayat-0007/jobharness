@@ -1,5 +1,3 @@
-from __future__ import annotations
-
 """Offline benchmark: `python -m jobharness.evaluation.benchmark`.
 
 Metrics table for dedup (composite similarity), authenticity, and matching
@@ -8,15 +6,17 @@ no production wiring. Statistical thresholds only reach production after
 real labeled data exists (GATE: Phase 4).
 """
 
+from __future__ import annotations
+
 from .. import algo
 from ..evidence.source import source_authority
 from ..models import Job
 from ..scoring.authenticity import authenticity_score
 from ..scoring.matching import score_match
+from .calibration import calibrate, platt_scale
 from .dataset import generate_dataset
-from .metrics import precision_recall_f1, expected_calibration_error, duplicate_metrics
-from .calibration import platt_scale, calibrate
-from .fellegi_sunter import m_u_estimates, pair_weight, classify
+from .fellegi_sunter import m_u_estimates, pair_weight
+from .metrics import duplicate_metrics, expected_calibration_error
 
 
 def _pair_similarity(pair: dict) -> float:

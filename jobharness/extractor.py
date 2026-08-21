@@ -3,8 +3,8 @@ from __future__ import annotations
 import logging
 import re
 
-from .models import RawJob, Job, MISSING, VALID_AUTHENTIC, _parse_date
 from .llm import provider as llm
+from .models import MISSING, Job, RawJob, _parse_date
 
 logger = logging.getLogger(__name__)
 

@@ -66,5 +66,5 @@ def test_send_file_unconfigured_returns_false(monkeypatch):
 
 def test_send_file_missing_file_returns_false(monkeypatch):
     monkeypatch.setattr(telegram.secrets, "get", lambda k, default="": {"TELEGRAM_BOT_TOKEN": "tok", "TELEGRAM_CHAT_ID": "chat"}.get(k, default))
-    with mock.patch("httpx.Client") as hc:
+    with mock.patch("httpx.Client"):
         assert telegram.send_file("/nonexistent/file.csv") is False

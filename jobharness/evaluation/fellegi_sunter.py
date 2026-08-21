@@ -1,5 +1,3 @@
-from __future__ import annotations
-
 """Fellegi-Sunter linkage weights (experiment module only).
 
 m_i = P(agree on field i | same entity), u_i = P(agree on field i | distinct).
@@ -7,6 +5,8 @@ Agreement weight W_i = log2(m_i/u_i); disagreement weight log2((1-m_i)/(1-u_i)).
 Totals classify pairs into HIGH / MIDDLE / LOW linkage. NOT wired into the
 production path until benchmark results justify it.
 """
+
+from __future__ import annotations
 
 import math
 

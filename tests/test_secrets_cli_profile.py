@@ -6,8 +6,8 @@ from unittest import mock
 import pytest
 
 from jobharness import secrets
-from jobharness.cli import build_parser, main
-from jobharness.profile import Profile, save_profile, load_profile, make_demo_profile
+from jobharness.cli import build_parser
+from jobharness.profile import Profile, load_profile, make_demo_profile, save_profile
 
 
 def test_secrets_get_default():

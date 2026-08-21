@@ -1,7 +1,9 @@
 from __future__ import annotations
 
-from jobharness.sources.jobposting_ld import extract_jobpostings_from_html, extract_jobpostings_from_blob
-
+from jobharness.sources.jobposting_ld import (
+    extract_jobpostings_from_blob,
+    extract_jobpostings_from_html,
+)
 
 FIXTURE_HTML = """
 <html><head>

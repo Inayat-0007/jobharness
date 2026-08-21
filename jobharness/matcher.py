@@ -5,7 +5,6 @@ import re
 from .models import Job
 from .profile import Profile
 
-
 # Cities/states whose presence in a location string marks it as India even when
 # the word "India" is absent (e.g. "Bangalore, Karnataka").
 INDIA_HINTS = (
