@@ -1,9 +1,12 @@
 from __future__ import annotations
 
+import logging
 import re
 
 from .models import RawJob, Job, MISSING, VALID_AUTHENTIC, _parse_date
 from .llm import provider as llm
+
+logger = logging.getLogger(__name__)
 
 
 EXTRACT_SCHEMA = (
@@ -76,7 +79,8 @@ def extract(raw: RawJob, use_llm: bool = True, llm_provider: str = "gemini") -> 
                 make_extract_prompt(raw), schema_hint=EXTRACT_SCHEMA, provider=llm_provider
             )
             fields = llm.extract_json(content)
-        except Exception:
+        except Exception as e:
+            logger.warning("LLM extraction failed (provider=%s): %s", llm_provider, e)
             fields = {}
         if fields:
             if not _is_missing(fields.get("role")):

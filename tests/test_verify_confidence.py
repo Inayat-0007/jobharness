@@ -83,3 +83,32 @@ def test_verify_closed_marker_excludes():
     with mock.patch("jobharness.verify.make_client", return_value=_Ctx(_Resp(text="This position is no longer accepting applications."))):
         verify.verify(job)
     assert job.authentic_status == CLOSED
+
+
+def test_score_base_fixed_fixture_values():
+    """Weight constants must reproduce the historical score for a fixture job."""
+    job = make_job()
+    job.source_name = "greenhouse"
+    job.date_posted = "2026-08-22"  # future → fresh
+    job.valid_through = ""
+    score = verify._score_base(job)
+    assert score == 80  # completeness 48 + fresh 24 + ATS boost 10 = 82, capped at 80
+
+
+def test_score_base_aggregator_no_ats_boost():
+    job = make_job()
+    job.source_name = "remoteok"
+    job.date_posted = "2026-08-22"  # future → fresh
+    score = verify._score_base(job)
+    assert score == 72  # 48 + 24, no ATS boost
+
+
+def test_score_base_ats_boost_follows_authority_map():
+    """Boost must be derived from SOURCE_AUTHORITY, not a hardcoded list."""
+    job = make_job()
+    job.source_name = "somebrandnewname"
+    job.date_posted = "2026-08-01"  # older: base = 48 + 4 = 52
+    with mock.patch("jobharness.verify.source_authority", return_value=5):
+        assert verify._score_base(job) == 62
+    with mock.patch("jobharness.verify.source_authority", return_value=2):
+        assert verify._score_base(job) == 52

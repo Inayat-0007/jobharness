@@ -12,7 +12,22 @@ from .models import Job, CLOSED, MISSING, VALID_AUTHENTIC, _parse_date, freshnes
 from .fetcher import make_client, blocked_response
 from .urlutil import apply_url_domain as _domain
 from .scoring.authenticity import authenticity_score as _authenticity_score
-from .scoring.thresholds import REJECT as _REJECT_DECISION
+from .scoring.thresholds import (
+    REJECT as _REJECT_DECISION,
+    SCORE_ATS_BOOST,
+    SCORE_ATS_MIN_AUTHORITY,
+    SCORE_BLOCKED_CAP,
+    SCORE_CAP,
+    SCORE_COMPLETENESS_WEIGHT,
+    SCORE_DOMAIN_MATCH_BOOST,
+    SCORE_DOMAIN_MATCH_CAP,
+    SCORE_EXPIRED_PENALTY,
+    SCORE_FRESH_BONUS,
+    SCORE_OLDER_BONUS,
+    SCORE_RECENT_BONUS,
+    SCORE_STALE_PENALTY,
+)
+from .evidence.source import source_authority
 
 _company_domain_hint = algo.company_domain_hint
 
@@ -80,7 +95,7 @@ def verify(job: Job, check_reachable: bool = True) -> Job:
         ctx["blocked"] = True
         job._verify_ctx = ctx
         job.missing_fields.append("verified_reachable")
-        job.confidence_score = min(job.confidence_score, 40)
+        job.confidence_score = min(job.confidence_score, SCORE_BLOCKED_CAP)
         return job
     snippet = (resp.text or "")[:8000].lower()
     marker = next((m for m in CLOSED_MARKERS if m in snippet), "")
@@ -99,9 +114,9 @@ def verify(job: Job, check_reachable: bool = True) -> Job:
     if job.employer_domain and job.company:
         hint = _company_domain_hint(job.company)
         if hint and hint in job.employer_domain:
-            job.confidence_score = min(100, job.confidence_score + 25)
+            job.confidence_score = min(100, job.confidence_score + SCORE_DOMAIN_MATCH_BOOST)
         else:
-            job.confidence_score = min(job.confidence_score, 55)
+            job.confidence_score = min(job.confidence_score, SCORE_DOMAIN_MATCH_CAP)
     return job
 
 
@@ -122,21 +137,22 @@ def _score_base(job: Job) -> int:
     of the feature values moved into algo.py. Never called "probability".
     """
     feats = algo.authenticity_features(job)
-    score = int(round(feats["completeness"] * 48))
+    score = int(round(feats["completeness"] * SCORE_COMPLETENESS_WEIGHT))
     fr = job.freshness or freshness_label(job.date_posted)
     job.freshness = fr
     if fr == "fresh":
-        score += 24
+        score += SCORE_FRESH_BONUS
     elif fr == "recent":
-        score += 16
+        score += SCORE_RECENT_BONUS
     elif fr == "older":
-        score += 4
+        score += SCORE_OLDER_BONUS
     elif fr == "stale":
-        score -= 10
+        score -= SCORE_STALE_PENALTY
     # Aggregator-only sources are slightly less trusted than employer ATS.
-    if job.source_name in ("greenhouse", "lever", "career_page_generic", "usajobs"):
-        score += 10
+    # Derived from the single SOURCE_AUTHORITY map (evidence/source.py).
+    if source_authority(job.source_name) >= SCORE_ATS_MIN_AUTHORITY:
+        score += SCORE_ATS_BOOST
     # staleness by age even when date present: use valid_through if available
     if job.valid_through and _is_expired(job.valid_through):
-        score -= 20
-    return max(0, min(80, score))
+        score -= SCORE_EXPIRED_PENALTY
+    return max(0, min(SCORE_CAP, score))

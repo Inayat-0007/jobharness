@@ -1,5 +1,6 @@
 from __future__ import annotations
 
+import logging
 import time
 
 from .base import SourceAdapter
@@ -12,6 +13,8 @@ from ..browser import (
     scroll_to_load,
     wait_for_selector_any,
 )
+
+logger = logging.getLogger(__name__)
 
 
 class IndeedAdapter(SourceAdapter):
@@ -121,6 +124,7 @@ class IndeedAdapter(SourceAdapter):
                         )
                     )
                     seen += 1
-                except Exception:
+                except Exception as e:
+                    logger.debug("indeed card parse skipped: %s", e)
                     continue
         return out

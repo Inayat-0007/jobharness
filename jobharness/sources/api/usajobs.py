@@ -40,7 +40,14 @@ class USAJobsAdapter(SourceAdapter):
             company = jd.get("OrganizationName", "")
             loc = jd.get("PositionLocationDisplay", "")
             desc = jd.get("QualificationSummary", "")
-            apply_url = jd.get("ApplyURI", [None])[0] if jd.get("ApplyURI") else ""
+            apply_uris = jd.get("ApplyURI")
+            apply_url = (
+                apply_uris[0]
+                if isinstance(apply_uris, list) and apply_uris
+                else apply_uris
+                if isinstance(apply_uris, str)
+                else ""
+            )
             posted = jd.get("PublicationStartDate", "")
             out.append(
                 RawJob(

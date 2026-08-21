@@ -131,32 +131,3 @@ def write_pdf(html_path: str, pdf_path: str | Path) -> str:
     except Exception as e:
         print(f"[report] PDF generation failed: {e}")
         return ""
-
-
-def write_pdf(html_path: str, pdf_path: str | Path) -> str:
-    """Print the HTML report to a structured PDF via headless Chromium.
-
-    Returns the PDF path on success, or '' (with a logged warning) if
-    Playwright is unavailable or the conversion fails.
-    """
-    try:
-        from playwright.sync_api import sync_playwright
-    except Exception:
-        print("[report] PDF disabled: playwright not available")
-        return ""
-    try:
-        with sync_playwright() as p:
-            browser = p.chromium.launch()
-            page = browser.new_page()
-            page.goto(Path(html_path).resolve().as_uri(), wait_until="networkidle")
-            page.pdf(
-                path=str(pdf_path),
-                format="A4",
-                print_background=True,
-                margin={"top": "10mm", "bottom": "10mm", "left": "8mm", "right": "8mm"},
-            )
-            browser.close()
-        return str(pdf_path)
-    except Exception as e:
-        print(f"[report] PDF generation failed: {e}")
-        return ""

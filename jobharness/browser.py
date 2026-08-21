@@ -1,5 +1,6 @@
 from __future__ import annotations
 
+import logging
 import os
 import random
 import threading
@@ -10,6 +11,8 @@ from typing import Optional
 
 from . import secrets
 from .fetcher import pick_proxy, UA_POOL
+
+logger = logging.getLogger(__name__)
 
 
 _BROWSER_LOCK = threading.Lock()
@@ -81,8 +84,8 @@ def _reload_for_recaptcha(page, source: str, reloads: list) -> None:
             page.reload(timeout=60000, wait_until="domcontentloaded")
             reloads[0] -= 1
             time.sleep(4)
-    except Exception:
-        pass
+    except Exception as e:
+        logger.debug("[%s] reCAPTCHA reload failed: %s", source, e)
 
 
 def wait_for_login(page, source: str, url: str, is_login_wall, timeout: int = 600) -> bool:
@@ -105,12 +108,12 @@ def wait_for_login(page, source: str, url: str, is_login_wall, timeout: int = 60
             if not is_login_wall(page):
                 try:
                     page.goto(url, timeout=60000, wait_until="domcontentloaded")
-                except Exception:
-                    pass
+                except Exception as e:
+                    logger.debug("[%s] goto failed during login wait: %s", source, e)
                 time.sleep(2)
                 return not is_login_wall(page)
-        except Exception:
-            pass
+        except Exception as e:
+            logger.debug("[%s] login wall check failed: %s", source, e)
         if waited % 30 == 0:
             print(f"[{source}] still waiting for login... ({waited}s)")
     print(f"[{source}] login wait timed out after {timeout}s")
@@ -295,8 +298,8 @@ def apply_stealth(context) -> None:
     """
     try:
         context.add_init_script(STEALTH_JS)
-    except Exception:
-        pass
+    except Exception as e:
+        logger.debug("stealth init script failed: %s", e)
     try:
         from playwright_stealth import stealth_sync  # type: ignore
     except ImportError:
@@ -305,8 +308,8 @@ def apply_stealth(context) -> None:
     if stealth_sync is not None:
         try:
             stealth_sync(page)
-        except Exception:
-            pass
+        except Exception as e:
+            logger.debug("playwright_stealth patch failed: %s", e)
     try:
         page.add_init_script(
             "Object.defineProperty(navigator,'webdriver',{get:()=>undefined});"
@@ -314,8 +317,8 @@ def apply_stealth(context) -> None:
             "Object.defineProperty(navigator,'plugins',{get:()=>[1,2,3,4,5]});"
             "window.chrome={runtime:{}};"
         )
-    except Exception:
-        pass
+    except Exception as e:
+        logger.debug("page init script failed: %s", e)
 
 
 def scroll_to_load(page, *, max_scrolls: int = 6, pause: float = 0.8) -> None:

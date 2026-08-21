@@ -226,7 +226,7 @@ def run_once(
                         job.matched_via = fl["matched_via"] or "exact"
                     store.upsert(job)
             except Exception as e:
-                errors.append(f"dedupe: {e}")
+                errors.append(f"dedupe: {e}\n{traceback.format_exc()}")
     finally:
         store.close()
 
