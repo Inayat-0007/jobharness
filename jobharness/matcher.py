@@ -80,7 +80,15 @@ def _normalize_salary_to_annual(text) -> float | None:
 
 
 def _compile_terms(terms: list[str]) -> list[re.Pattern]:
-    return [re.compile(r"\b" + re.escape(term.lower()) + r"\b") for term in terms if term]
+    """Compile word-bounded terms. Terms ending in non-word chars (c++, c#,
+    p.a.) cannot use a trailing \\b (there is no boundary between two
+    non-word chars), so the tail is a lookahead: end-of-string, a digit, or
+    any non-alphanumeric character."""
+    return [
+        re.compile(r"\b" + re.escape(term.lower()) + r"(?=\d|[^a-z0-9]|$)")
+        for term in terms
+        if term
+    ]
 
 
 def _matches_patterns(text: str, patterns: list[re.Pattern]) -> bool:

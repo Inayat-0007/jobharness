@@ -122,6 +122,26 @@ def _consistent(a, b) -> bool:
     return sum(1 for t in ta if t in tb) / len(ta) >= 0.8
 
 
+def _salary_consistent(value, src) -> bool:
+    """Salary gate: accept a plain textual match, or a re-formatted salary
+    whose annualized magnitude matches the source text's (within 10%, covering
+    unit/currency/hyphenation noise: '₹15L - ₹20L' vs '15-20 LPA')."""
+    if _consistent(value, src):
+        return True
+    from .matcher import _normalize_salary_to_annual
+
+    def _expand_lakh(text: str) -> str:
+        # 'L' is the lakh shorthand ('15L' == '15 lakh'); the matcher's unit
+        # table only knows lakh/lac/lpa, so spell it out before annualizing.
+        return re.sub(r"(?<=\d)\s*[lL]\b", " lakh", text)
+
+    v = _normalize_salary_to_annual(_expand_lakh(str(value)))
+    s = _normalize_salary_to_annual(_expand_lakh(str(src)))
+    if v is None or s is None or v <= 0 or s <= 0:
+        return False
+    return 0.9 <= v / s <= 1.1
+
+
 def _llm_source_text(raw: RawJob) -> str:
     """The full text the LLM was asked to extract from, plus posting metadata.
 
@@ -184,24 +204,24 @@ def extract(raw: RawJob, use_llm: bool = True, llm_provider: str = "gemini", dat
             fields = {}
         if fields:
             src = _llm_source_text(raw)
-            if not _is_missing(fields.get("role")):
+            if not _is_missing(fields.get("role")) and _consistent(fields["role"], src):
                 job.role = fields["role"]
-            # Consistency gate: title/company/location are adopted ONLY when
-            # grounded in the source text (substring or >=80% token overlap).
-            # A hallucinated value never replaces source truth.
+            # Consistency gate: every LLM value is adopted ONLY when grounded
+            # in the source text (substring or >=80% token overlap). A
+            # hallucinated value never replaces source truth.
             for f in ("title", "company", "location"):
                 v = fields.get(f)
                 if not _is_missing(v) and _consistent(v, src):
                     setattr(job, f, str(v).strip())
-            if not _is_missing(fields.get("experience_needed")):
+            if not _is_missing(fields.get("experience_needed")) and _consistent(fields["experience_needed"], src):
                 job.experience_needed = fields["experience_needed"]
             if not _is_missing(fields.get("date_posted")):
                 llm_date = normalize_date(fields["date_posted"], date_format=date_format)
                 if llm_date and (llm_date == job.date_posted or _consistent(fields["date_posted"], src)):
                     job.date_posted = llm_date
-            if not _is_missing(fields.get("salary_if_present")):
+            if not _is_missing(fields.get("salary_if_present")) and _salary_consistent(fields["salary_if_present"], src):
                 job.salary_if_present = fields["salary_if_present"]
-            if not _is_missing(fields.get("seniority")):
+            if not _is_missing(fields.get("seniority")) and _consistent(fields["seniority"], src):
                 job.seniority = fields["seniority"]
             # Union, never overwrite: source-derived tech keywords survive an
             # LLM list that omitted them.
@@ -235,16 +255,36 @@ def extract(raw: RawJob, use_llm: bool = True, llm_provider: str = "gemini", dat
     return job
 
 
+_EXP_RANGE_RE = re.compile(r"(\d{1,2})\s*[-–]\s*(\d{1,2})\s*\+?\s*years?")
+
+
 def _infer_experience(desc: str) -> str:
     if not desc:
         return ""
     d = desc.lower()
-    if "5+ year" in d or "5 years" in d:
-        return "5+ years"
-    if "3+ year" in d or "3 years" in d:
-        return "3+ years"
-    if "2+ year" in d or "2 years" in d:
-        return "2+ years"
-    if "1+ year" in d or "1 year" in d:
-        return "1+ year"
+    m = _EXP_RANGE_RE.search(d)
+    if m:
+        return f"{m.group(1)}-{m.group(2)} years"
+    for pat, label in (
+        ("10+ year", "10+ years"),
+        ("10 years", "10+ years"),
+        ("8+ year", "8+ years"),
+        ("8 years", "8+ years"),
+        ("6+ year", "6+ years"),
+        ("6 years", "6+ years"),
+        ("5+ year", "5+ years"),
+        ("5 years", "5+ years"),
+        ("3+ year", "3+ years"),
+        ("3 years", "3+ years"),
+        ("2+ year", "2+ years"),
+        ("2 years", "2+ years"),
+        ("1+ year", "1+ year"),
+        ("1 year", "1+ year"),
+        ("0-1 year", "0-1 years"),
+        ("0 to 1 year", "0-1 years"),
+        ("fresher", "0-1 years"),
+        ("entry level", "0-1 years"),
+    ):
+        if pat in d:
+            return label
     return ""

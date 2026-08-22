@@ -86,3 +86,17 @@ def test_normalize_date_handles_iso():
 def test_normalize_date_returns_empty_for_missing():
     assert extractor.normalize_date("") == ""
     assert extractor.normalize_date("MISSING") == ""
+
+
+def test_infer_experience_ranges_and_fresher():
+    from jobharness.extractor import _infer_experience
+
+    assert _infer_experience("we need 3-5 years of experience") == "3-5 years"
+    assert _infer_experience("we need 3–5 years of experience") == "3-5 years"  # en-dash
+    assert _infer_experience("10+ years") == "10+ years"
+    assert _infer_experience("8 years") == "8+ years"
+    assert _infer_experience("0-1 years") == "0-1 years"
+    assert _infer_experience("freshers welcome") == "0-1 years"
+    assert _infer_experience("entry level role") == "0-1 years"
+    assert _infer_experience("") == ""
+    assert _infer_experience("competitive salary and great culture") == ""

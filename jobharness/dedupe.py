@@ -1,7 +1,8 @@
-﻿from __future__ import annotations
+from __future__ import annotations
 
 import hashlib
 import json
+import os
 import re
 import sqlite3
 import time
@@ -10,6 +11,7 @@ from pathlib import Path
 from . import algo
 from .logging import get_logger
 from .models import CLOSED, MISSING, VALID_AUTHENTIC, Job, job_id_hash
+from .scoring.thresholds import MIN_UNCERTAIN_IDENTITY
 
 SCHEMA_VERSION = 4
 
@@ -298,7 +300,23 @@ class DedupeStore:
         cur.execute("PRAGMA table_info(jobs)")
         cols = {r[1] for r in cur.fetchall()}
         if not cols or cols == {"job_id_hash", "placeholder"}:
-            # v1 placeholder path: rebuild from scratch (now to v3).
+            # v1 placeholder path: rebuild from scratch (now to v3). Back the
+            # file up first in case it ever held unexpected legacy data. WAL is
+            # active, so checkpoint first (committed pages may still live in
+            # the -wal file) and copy any leftover -wal alongside.
+            try:
+                import shutil
+                import time as _t
+
+                self.conn.execute("PRAGMA wal_checkpoint(TRUNCATE)")
+                backup = f"{self.path}.legacy-{int(_t.time())}.bak"
+                shutil.copyfile(self.path, backup)
+                wal = self.path + "-wal"
+                if os.path.exists(wal) and os.path.getsize(wal) > 0:
+                    shutil.copyfile(wal, backup + "-wal")
+                _log.warning("backed up legacy DB to %s before schema rebuild", backup)
+            except OSError:
+                pass
             cur.execute("DROP TABLE IF EXISTS jobs")
             self.conn.executescript(SCHEMA_V3)
         else:
@@ -602,8 +620,10 @@ class DedupeStore:
         }
         if not candidates:
             return result
-        best = None
+        best = None            # best hint-bearing candidate (exact/auto_merge/review)
         best_s = 0.0
+        score_best = None      # best-scoring candidate overall (identity_score)
+        score_best_s = 0.0
         for row in candidates:
             if job.job_id_hash and row["job_id_hash"] == job.job_id_hash:
                 best = ("exact", row, 1.0, "AUTO_ACCEPT")
@@ -627,13 +647,27 @@ class DedupeStore:
                 "review": "REVIEW",
                 "none": "",
             }[verdict]
-            if s > best_s:
+            if s > score_best_s:
+                score_best_s = s
+                score_best = ("fuzzy", row, s, hint)
+            # A "none" verdict (title-floor failure) must never displace a
+            # genuine review/auto_merge match: it carries no linkage hint.
+            if hint and s > best_s:
                 best_s = s
                 best = ("fuzzy", row, s, hint)
         if best is None:
+            # Candidates existed but none carried a linkage hint (all verdicts
+            # "none" = below the REVIEW bar or a title-floor failure). Preserve
+            # the strongest raw similarity as identity evidence when it is
+            # strong enough to signal uncertainty: returning 0.0 here would be
+            # read by decide() as "no known duplicates" and could AUTO_ACCEPT a
+            # near-duplicate. Weak candidates (< MIN_UNCERTAIN_IDENTITY) stay
+            # 0.0 so a genuinely-new job is not blocked from the new-job path.
+            if score_best is not None and score_best_s >= MIN_UNCERTAIN_IDENTITY:
+                result["identity_score"] = score_best[2]
             return result
-        via, row, score, hint = best
-        result["identity_score"] = score
+        via, row, _score, hint = best
+        result["identity_score"] = score_best[2] if score_best else 0.0
         result["possible_duplicate_of"] = row["job_id_hash"]
         result["existing_row"] = row
         if via == "exact" or hint:

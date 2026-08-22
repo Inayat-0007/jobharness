@@ -37,9 +37,33 @@ python -m jobharness run --profile profiles\free-only.yaml --no-llm --no-push
 The LLM is **optional** — it improves experience/seniority/salary extraction accuracy.
 Without it, the harness still works but those fields may be empty/`MISSING`.
 
-You said you have keys for Gemini, GLM, and Qwen. Get the cheapest one running:
+### Option A: DashScope / Alibaba (RECOMMENDED — free trial serves 4 models)
 
-### Option A: Gemini 2.0 Flash (recommended — has a free tier)
+One key on the international endpoint runs the whole fallback chain:
+`qwen3.8-max`, `deepseek-v4-flash`, `glm-5.2`, `deepseek-v4-pro`.
+
+1. Get a key from https://bailian.console.alibabacloud.com (Model Studio /
+   DashScope, international site)
+2. Edit `C:\Users\moham\jobharness\.env`:
+   ```
+   DASHSCOPE_API_KEY=your-key
+   DASHSCOPE_BASE_URL=https://dashscope-intl.aliyuncs.com/compatible-mode/v1
+   ```
+3. Set `llm_provider: dashscope_qwen` in your profile YAML (default already).
+4. If a model's free quota lives on a different key (e.g. qwen3.8-max):
+   ```
+   DASHSCOPE_QWEN_API_KEY=second-key
+   DASHSCOPE_GLM_API_KEY=third-key
+   ```
+5. Test:
+   ```powershell
+   python -m jobharness run --profile profiles\free-only.yaml
+   ```
+   You should see `LLM usage: N calls, N ok` in the log, and the Telegram
+   attachment is the styled `report.xlsx` (shortened apply links, wrapped text,
+   every field filled).
+
+### Option B: Gemini 2.0 Flash (Google AI Studio)
 
 1. Go to https://aistudio.google.com/apikey
 2. Sign in with your Google account
@@ -55,7 +79,7 @@ You said you have keys for Gemini, GLM, and Qwen. Get the cheapest one running:
    ```
    (remove `--no-llm` to enable AI extraction)
 
-### Option B: GLM 4 Flash (Z.ai / Zhipu)
+### Option C: GLM 4 Flash (Z.ai / Zhipu)
 
 1. Go to https://open.bigmodel.cn/usercenter/apikeys
 2. Create a key
@@ -65,7 +89,7 @@ You said you have keys for Gemini, GLM, and Qwen. Get the cheapest one running:
    ```
 4. Set `llm_provider: glm` in your profile YAML
 
-### Option C: Qwen (DashScope)
+### Option D: Qwen (DashScope China)
 
 1. Go to https://dashscope.console.aliyun.com/apiKey
 2. Create a key
@@ -76,7 +100,10 @@ You said you have keys for Gemini, GLM, and Qwen. Get the cheapest one running:
 4. Set `llm_provider: qwen` in your profile YAML
 
 The harness tries the configured provider first, then falls back through the
-others automatically. So if Gemini fails, it tries GLM, then Qwen.
+others automatically. So if DashScope is down, it tries DeepSeek, NVIDIA,
+OpenRouter, Gemini, GLM, Qwen in order. Providers that keep failing are
+circuit-broken for 5 minutes; quota-exhausted providers are quarantined for a
+day so they never slow a run down.
 
 ---
 

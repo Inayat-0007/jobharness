@@ -358,6 +358,26 @@ Tests that need a real browser, the ML extra or live network are marked `browser
 
 ## 📜 Changelog — What Was Fixed & Improved
 
+**V5 — real LLM data, no repeats, Excel delivery:**
+- **DashScope (Alibaba) free-trial LLM chain** — the previous chain was 100% down (nvidia timeouts, DeepSeek 402, others unkeyed: `240 calls, 0 ok`). Added four `dashscope_*` providers (`qwen3.8-max`, `deepseek-v4-flash`, `glm-5.2`, `deepseek-v4-pro`) on the intl endpoint with one key, per-model key overrides (`DASHSCOPE_QWEN_API_KEY`, …), and `dashscope_qwen` as the new default. On the current key `deepseek-v4-flash` is live and serves extraction; `qwen3.8-max`/`glm-5.2` 403-quota providers are auto-quarantined for 24h until their own keys are added.
+- **Circuit breaker now cools on ANY failure** — previously only 429s; timeouts/402s re-burned 60 s per call (extract stage took 1230 s). Any 3 consecutive failures cool for 5 min; a single quota-exhaustion error quarantines for 24 h. Client timeout split to connect 10 s / read 45 s.
+- **Reasoning-model fix** — DashScope's deepseek-v4 models emit `reasoning_content` before the answer; the old 900-token cap was consumed entirely by reasoning (empty JSON). `complete()` defaults to 4000 tokens, so extraction content now actually arrives.
+- **Adzuna company bug** — adapter read `company.displayname`; the API field is `display_name` (underscore), so every Adzuna job lost its company. Fixed with both spellings; salary min/max now formatted as a range.
+- **Verify reachability cache** (`verify_cache.py`, in `jobs.db`) — definitive OK/CLOSED outcomes cached 24 h/7 d, so repeat runs stop re-requesting the same apply URLs (the LinkedIn 429 storm) and stop re-pushing DEGRADED warnings for known URLs. Transient results are never cached.
+- **Designed Excel report replaces PDF on Telegram** — `report.xlsx` with a Summary sheet (counts, decisions) + a fully-styled Jobs sheet: every field filled (no gaps), shortened apply hyperlinks (display `apply ▸ domain/…` + full URL column), wrapped text, frozen header + auto-filter, zebra striping, NEW highlight, decision color coding. PDF stays as a local artifact.
+- **Profile** — `llm_provider: dashscope_qwen` (was `nvidia`).
+- **Tests:** 432 → 466 (DashScope provider chain, quota quarantine, xlsx writer, verify cache).
+
+**V4.1 — audit fixes (post-release):**
+- **CI** — workflow now runs on every branch push/PR (previously only `main`/`V3`, so the v4 release was never validated by CI)
+- **Dedupe** — `fuzzy_lookup` now prefers `review`/`auto_merge` candidates over higher-scoring `none` verdicts (near-duplicates were stored as new when a title-floor-fail candidate outscored a genuine review match); legacy v1 placeholder DBs are backed up before the schema rebuild
+- **Matcher** — word-boundary fix for terms ending in non-word chars (`c++`, `c#`, `p.a.` excludes now match)
+- **LLM provider** — `Retry-After` sleeps capped at 30s (an unbounded header could pin a worker thread for an hour)
+- **DEGRADED cards** — the Telegram warning now states the actual failure class (source rate-limited / site error / network error) instead of always blaming rate-limiting
+- **Dedupe reliability** — lookup failures are retried once on the main store and counted in the manifest (`dedupe_failures`, `dedupe_skipped`) instead of silently dropping jobs
+- **Hallucination gate** — consistency gating extended to `role`, `salary_if_present`, `seniority`, `experience_needed` (previously only title/company/location/date were gated); experience inference now handles ranges (`3-5 years`) and fresher labels
+- **Telegram** — cards are truncated to the API limit before send; `print()` replaced with structured logging; per-run push stats reset before each push stage
+
 **V4 — calibration, reliability & expanded fresher coverage (current):**
 - **Scoring recalibration** — saturation-capped BM25/skill normalization in `scoring/matching.py`; `AUTO_ACCEPT` was structurally unreachable (max observed match 0.230 vs old 0.60 bar, 0 AUTO_ACCEPT in 4 runs) — now reachable via `identity ≥ 0.95 + auth ≥ 55 + match ≥ 0.30` in `thresholds.py`; live runs now emit `AUTO_ACCEPT` decisions.
 - **LLM provider hardening** — 429 circuit breaker (3 strikes → 5-min cooldown), ordered fallback chain (requested provider → deepseek/nvidia/openrouter/gemini/glm/qwen), per-provider + aggregate usage stats (`LLM usage: N calls, M ok, K rate-limited`), `good` alias for successes.

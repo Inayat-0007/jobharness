@@ -1,6 +1,7 @@
 from __future__ import annotations
 
 import html as _html
+import re
 from unittest import mock
 
 import pytest
@@ -96,15 +97,17 @@ def test_send_card_adds_inline_apply_button():
     }
 
 
-def test_send_card_surfaces_non_200_not_silent(capsys):
+def test_send_card_surfaces_non_200_not_silent(caplog):
     job = _job_with_specials()
+    caplog.set_level("WARNING", logger="jobharness.telegram")
     fake = FakeCtx(FakeResp(400, '{"ok":false,"description":"bad request"}'))
     with mock.patch.object(telegram.secrets, "get", side_effect=["tok", "chat"]):
         with mock.patch("httpx.Client", return_value=fake):
             ok = telegram.send_card(job)
     assert ok is False
-    captured = capsys.readouterr().out
-    assert "400" in captured
+    assert any(
+        "400" in r.message and r.name == "jobharness.telegram" for r in caplog.records
+    )
 
 
 def test_send_card_retries_once_on_429_then_succeeds(monkeypatch):
@@ -152,6 +155,7 @@ def test_send_card_failure_increments_failed_stats(monkeypatch, capsys):
 def test_card_text_includes_degraded_warning_before_apply_link():
     job = _job_with_specials()
     job.authentic_status = "DEGRADED"
+    job._verify_ctx = {"failure_class": "rate_limited"}
     text = telegram._card_text(job)
     warning = "⚠️ link could not be verified (source rate-limited)"
     assert warning in text
@@ -204,3 +208,64 @@ def test_notify_new_skips_low_confidence():
             n = telegram.notify_new([job])
     assert n == 0
     sc.assert_not_called()
+
+
+@pytest.mark.parametrize(
+    "failure_class,expected",
+    [
+        ("rate_limited", "source rate-limited"),
+        ("server_error", "site returned an error"),
+        ("network_error", "network error"),
+        (None, "verification failed"),
+        ("unexpected", "verification failed"),
+    ],
+)
+def test_degraded_card_label_reflects_failure_class(failure_class, expected):
+    job = _job_with_specials()
+    job.authentic_status = "DEGRADED"
+    if failure_class is None:
+        job._verify_ctx = {}
+    else:
+        job._verify_ctx = {"failure_class": failure_class}
+    text = telegram._card_text(job)
+    assert f"link could not be verified ({expected})" in text
+
+
+def test_send_card_truncates_long_text(monkeypatch):
+    job = _job_with_specials()
+    long_title = "X" * 5000
+    job.title = long_title
+    job.role = long_title
+    monkeypatch.setattr(
+        telegram.secrets, "get", lambda k, default="": {"TELEGRAM_BOT_TOKEN": "tok", "TELEGRAM_CHAT_ID": "chat"}.get(k, default)
+    )
+    captured = []
+
+    class _RecClient:
+        def post(self, url, **kwargs):
+            captured.append(kwargs.get("json"))
+            return FakeResp(200)
+
+    monkeypatch.setattr(telegram, "_get_client", lambda: _RecClient())
+    ok = telegram.send_card(job)
+    assert ok is True
+    text = captured[0]["text"]
+    assert len(text) <= 1028
+    assert text.endswith("...")
+
+
+def test_truncate_card_strips_partial_entity_and_tag():
+    """_truncate_card must not leave a dangling entity (&am) or tag (<b)
+    at the cut: Telegram's HTML parser rejects those with HTTP 400."""
+    partial_entity = "<b>" + "x" * 1013 + " &amp;" + "y" * 100
+    partial_tag = "x" * 1018 + "<b" + "y" * 10
+    for long_text in (partial_entity, partial_tag):
+        result = telegram._truncate_card(long_text)
+        assert not re.search(r"&[^;]*$", result)
+        assert not re.search(r"<[^>]*$", result)
+        assert result.endswith("...")
+
+    plain = telegram._truncate_card("z" * 2000)
+    assert plain.endswith("...")
+    assert not re.search(r"&[^;]*$", plain)
+    assert not re.search(r"<[^>]*$", plain)

@@ -81,7 +81,12 @@ class AdzunaAdapter(SourceAdapter):
                 if job_id:
                     seen_ids.add(job_id)
                 title = r.get("title", "")
-                company = (r.get("company") or {}).get("displayname", "")
+                comp = r.get("company") or {}
+                # Adzuna's API field is display_name (underscore); tolerate the
+                # displayname variant too. Without this, every job's company
+                # came back empty and the LLM's grounded extraction was all
+                # that ever survived the consistency gate.
+                company = comp.get("display_name") or comp.get("displayname") or ""
                 loc = (r.get("location") or {}).get("displayname", "")
                 cname = COUNTRY_NAMES.get(country, country.upper())
                 if cname.lower() not in loc.lower():
@@ -89,6 +94,14 @@ class AdzunaAdapter(SourceAdapter):
                 desc = r.get("description", "")
                 apply_url = r.get("redirect_url") or r.get("url") or ""
                 created = r.get("created", "")
+                sal_min = r.get("salary_min") or 0
+                sal_max = r.get("salary_max") or 0
+                if sal_min and sal_max:
+                    salary = f"{sal_min} - {sal_max}"
+                elif sal_min:
+                    salary = str(sal_min)
+                else:
+                    salary = ""
                 out.append(
                     RawJob(
                         source_name=self.name,
@@ -99,7 +112,7 @@ class AdzunaAdapter(SourceAdapter):
                         description=desc,
                         posted_date=created,
                         apply_url=apply_url,
-                        extra={"salary": r.get("salary_min", ""), "contract_time": r.get("contract_time", "")},
+                        extra={"salary": salary, "contract_time": r.get("contract_time", "")},
                     )
                 )
         return out

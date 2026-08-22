@@ -115,3 +115,59 @@ def test_compiled_patterns_cached_on_profile():
     assert set(cached) == {"roles", "keywords", "excludes"}
     assert matches_profile(make_job(title="Marketing Lead", desc="java spring"), p) is False
     assert p._compiled_patterns is cached
+
+
+def test_exclude_cpp_terms_match():
+    def _job(title="Backend Engineer", desc="", company="Acme", location="Remote"):
+        j = Job(title=title, company=company, location=location)
+        j.role = title
+        j.description = desc
+        j.tech_stack_keywords = []
+        j.remote = "remote" in location.lower()
+        return j
+
+    def _profile(**kw):
+        p = Profile(roles=[], keywords=[], excludes=["c++"])
+        for k, v in kw.items():
+            setattr(p, k, v)
+        return p
+
+    # C++ jobs must be rejected
+    assert matches_profile(_job(title="C++ Developer"), _profile()) is False
+    assert matches_profile(_job(title="C++11 Developer"), _profile()) is False
+    assert matches_profile(_job(title="C++/Qt Developer"), _profile()) is False
+    # Non-C++ jobs must NOT be rejected by the c++ exclude
+    assert matches_profile(_job(title="Customer Success Manager"), _profile()) is True
+    assert matches_profile(_job(title="Python Developer"), _profile()) is True
+
+
+def test_exclude_pa_and_csharp_terms():
+    def _job(title="Backend Engineer", desc="", company="Acme", location="Remote"):
+        j = Job(title=title, company=company, location=location)
+        j.role = title
+        j.description = desc
+        j.tech_stack_keywords = []
+        j.remote = "remote" in location.lower()
+        return j
+
+    def _profile(excludes, **kw):
+        p = Profile(roles=[], keywords=[], excludes=excludes)
+        for k, v in kw.items():
+            setattr(p, k, v)
+        return p
+
+    # p.a. exclude: "12 LPA p.a." description rejected
+    assert matches_profile(
+        _job(title="Developer", desc="salary 12 LPA p.a. with benefits"),
+        _profile(excludes=["p.a."]),
+    ) is False
+    # "LPA" alone (no "p.a.") must NOT be falsely excluded
+    assert matches_profile(
+        _job(title="Developer", desc="salary 12 LPA"),
+        _profile(excludes=["p.a."]),
+    ) is True
+    # c# exclude
+    assert matches_profile(
+        _job(title="C# Developer"),
+        _profile(excludes=["c#"]),
+    ) is False

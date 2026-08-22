@@ -1,6 +1,8 @@
 from __future__ import annotations
 
 import html as _html
+import logging
+import re
 import time
 
 import httpx
@@ -13,9 +15,18 @@ _file_client: httpx.Client | None = None
 
 push_stats = {"sent": 0, "failed": 0}
 
+logger = logging.getLogger("jobharness.telegram")
+
 _RETRY_AFTER_FALLBACK = 2.0
 _BATCH_SIZE = 10
 _MAX_TEXT_LEN = 1024
+
+# Failure classes recorded by verify.py's DEGRADED path (ctx["failure_class"]).
+_DEGRADED_LABELS = {
+    "rate_limited": "source rate-limited",
+    "server_error": "site returned an error",
+    "network_error": "network error",
+}
 
 
 def _bot_token() -> str:
@@ -74,8 +85,10 @@ def _card_text(job: Job) -> str:
     if reasons:
         text += f"Reason: {_html.escape(str(reasons[0]))}\n"
     if getattr(job, "authentic_status", "") == "DEGRADED":
-        # Static literal (no user-controlled data) - no escaping needed.
-        text += "⚠️ link could not be verified (source rate-limited)\n"
+        # Static literals (no user-controlled data) - no escaping needed.
+        cls = (getattr(job, "_verify_ctx", None) or {}).get("failure_class", "")
+        label = _DEGRADED_LABELS.get(cls, "verification failed")
+        text += f"⚠️ link could not be verified ({label})\n"
     text += f'<a href="{_html.escape(job.apply_url_direct or "", quote=True)}">Apply directly</a>'
     return text
 
@@ -88,7 +101,13 @@ def _truncate_card(text: str) -> str:
     if cut > 0:
         head = head[:cut]
     head = head.rstrip("\n")
-    return head[: _MAX_TEXT_LEN - 4] + "\n..."
+    head = head[: _MAX_TEXT_LEN - 4]
+    # Telegram parses the card as HTML: a hard cut can leave a dangling tag
+    # (<b>...) or entity (&amp; -> &am) which the API rejects with a 400, so
+    # the alert is never delivered. Strip any trailing partial markup.
+    head = re.sub(r"&[^;]*$", "", head)
+    head = re.sub(r"<[^>]*$", "", head)
+    return head + "\n..."
 
 
 def send_card(job: Job) -> bool:
@@ -97,7 +116,7 @@ def send_card(job: Job) -> bool:
     if not token or not chat:
         push_stats["failed"] += 1
         return False
-    text = _card_text(job)
+    text = _truncate_card(_card_text(job))
     url = f"https://api.telegram.org/bot{token}/sendMessage"
     payload = {
         "chat_id": chat,
@@ -113,13 +132,13 @@ def send_card(job: Job) -> bool:
         resp = _post_with_retry(_get_client(), url, json=payload)
         if resp.status_code != 200:
             snippet = (resp.text or "")[:140]
-            print(f"[telegram] sendMessage failed: HTTP {resp.status_code} {snippet}")
+            logger.warning(f"sendMessage failed: HTTP {resp.status_code} {snippet}")
             push_stats["failed"] += 1
             return False
         push_stats["sent"] += 1
         return True
     except httpx.HTTPError as e:
-        print(f"[telegram] sendMessage network error: {e}")
+        logger.warning(f"sendMessage network error: {e}")
         push_stats["failed"] += 1
         return False
 

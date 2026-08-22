@@ -2,9 +2,7 @@
 
 on:
   push:
-    branches: [main, V3]
   pull_request:
-    branches: [main, V3]
 
 jobs:
   lint:

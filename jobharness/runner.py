@@ -12,7 +12,7 @@ from concurrent.futures import ThreadPoolExecutor, as_completed
 from pathlib import Path
 from typing import TypeVar
 
-from . import algo, secrets
+from . import algo, secrets, verify_cache
 from .dedupe import DedupeStore
 from .evidence.negative import negative_signals
 from .evidence.positive import positive_signals
@@ -28,12 +28,12 @@ from .matcher import matches_profile
 from .models import CLOSED, MISSING, Job, RawJob, _parse_date
 from .notify import telegram
 from .profile import Profile
-from .registry import enabled_adapters
+from .registry import all_adapters, enabled_adapters
 from .report import write_pdf, write_reports
 from .scoring.authenticity import authenticity_score as _authenticity_score
 from .scoring.decision import decide
 from .scoring.matching import score_match
-from .scoring.thresholds import STATE_CLOSED, STATE_INVALID_URL, STATE_OPEN
+from .scoring.thresholds import MIN_UNCERTAIN_IDENTITY, STATE_CLOSED, STATE_INVALID_URL, STATE_OPEN
 from .sources.exceptions import (
     AuthRequiredError,
     BlockedError,
@@ -46,7 +46,7 @@ from .verify import DEGRADED, verify
 
 # Optional LLM call observability: stats() is added to llm.provider by a
 # parallel change; import defensively so older providers still work.
-_llm_stats: Callable[[], dict[str, dict[str, int]]] | None
+_llm_stats: Callable[[], dict[str, dict[str, int] | int]] | None
 try:
     from .llm.provider import stats as _llm_stats
 except (ImportError, AttributeError):  # pragma: no cover - provider without stats
@@ -191,6 +191,11 @@ def run_once(
     db_path = Path(project_root) / "jobs.db"
     reports_dir = Path(project_root) / "reports"
 
+    # Two runs in the same second would share a report dir (interleaved
+    # manifests); disambiguate with a microsecond suffix on collision.
+    if (reports_dir / run_ts).exists():
+        run_ts = dt.datetime.now().strftime("%Y%m%d-%H%M%S-%f")
+
     # Run timeout budget (Profile.timeout_minutes; <= 0 = no limit). Once the
     # deadline passes, remaining pipeline stages are skipped best-effort
     # (in-flight work is never killed, just no new work is submitted), and the
@@ -220,6 +225,11 @@ def run_once(
         return True
 
     adapters = enabled_adapters(profile)
+    unknown_sources = sorted(
+        n for n, on in profile.sources.items() if on and n not in all_adapters()
+    )
+    if unknown_sources:
+        logger.warning("profile enables unknown source name(s) (typo?): %s", unknown_sources)
     if source_filter:
         adapters = [a for a in adapters if a.name in source_filter]
 
@@ -390,6 +400,10 @@ def run_once(
         v_job.missing_fields.append("verified_reachable")
 
     t0 = time.monotonic()
+    # Open the verify reachability cache (shares jobs.db) before the worker
+    # pool starts, so repeat runs skip already-checked apply URLs instead of
+    # re-requesting them (LinkedIn 429 storm) and re-marking them DEGRADED.
+    verify_cache.configure(db_path)
     if verify_reachable and matched:
         with ThreadPoolExecutor(max_workers=VERIFY_WORKERS) as ex:
             _bounded_map(
@@ -447,6 +461,8 @@ def run_once(
     # commits inside the store still apply).
     t0 = time.monotonic()
     re_alerted_count = 0
+    dedupe_failures = 0
+    dedupe_skipped = 0
     store = DedupeStore(db_path, reports_dir=reports_dir)
     try:
         if _deadline_passed():
@@ -463,11 +479,14 @@ def run_once(
                 return _tls.store.fuzzy_lookup(job)
 
             def _abort_dedupe_lookups(i):
+                nonlocal dedupe_skipped
                 timeout_aborted["dedupe"] = True
+                dedupe_skipped = len(matched) - i
                 logger.warning(
-                    "run timeout exceeded: aborting dedupe lookups (submitted %d/%d jobs)",
+                    "run timeout exceeded: aborting dedupe lookups (submitted %d/%d jobs; %d skipped)",
                     i,
                     len(matched),
+                    dedupe_skipped,
                 )
 
             def _on_lookup_error(_idx, exc):
@@ -509,7 +528,29 @@ def run_once(
             run_seen: dict[str, sqlite3.Row] = {}
             for _, d_job, d_fl in lookups:
                 if d_fl is None:
-                    continue
+                    # Parallel lookup failed (transient SQLite error). Retry once
+                    # sequentially on the main store; if it fails again, degrade
+                    # to a plain upsert (exact-hash dedup still applies inside
+                    # the store) so the job is never silently dropped from the DB.
+                    try:
+                        d_fl = store.fuzzy_lookup(d_job)
+                    except Exception as e:
+                        dedupe_failures += 1
+                        logger.error("dedupe: retry lookup failed for %s: %s", d_job.title, e)
+                        d_fl = None
+                    if d_fl is None:
+                        # Double lookup failure: we could not check for fuzzy
+                        # duplicates. Put the job in the uncertain-identity band
+                        # (REVIEW) instead of 0.0, which decide() would read as
+                        # "no known duplicates" and could AUTO_ACCEPT.
+                        d_fl = {
+                            "matched": False,
+                            "matched_via": "",
+                            "identity_score": MIN_UNCERTAIN_IDENTITY,
+                            "possible_duplicate_of": "",
+                            "decision_hint": "",
+                            "existing_row": None,
+                        }
                 try:
                     run_match = None if d_fl["matched"] else _run_seen_match(d_job, run_seen)
                     if run_match is not None:
@@ -565,10 +606,17 @@ def run_once(
                 logger.info("re-alerted count: %d", re_alerted_count)
     finally:
         store.close()
+    if dedupe_failures or dedupe_skipped:
+        logger.warning(
+            "dedupe: %d lookup failure(s) retried/degraded, %d job(s) skipped by timeout",
+            dedupe_failures,
+            dedupe_skipped,
+        )
     stage_elapsed["dedupe"] = time.monotonic() - t0
 
-    # Rank by decision, then match_score (fallback: confidence_score until
-    # Phase 3), then freshness, then newest first_seen.
+    # Rank by decision, then match_score (confidence fallback keeps ordering
+    # meaningful when the dedupe stage was aborted by the run timeout and
+    # match_score was never assigned), then freshness, then newest first_seen.
     matched.sort(
         key=lambda j: (
             DECISION_RANK.get(j.decision, 0),
@@ -603,6 +651,7 @@ def run_once(
         logger.warning("run timeout exceeded: skipping telegram push")
     elif push_telegram and telegram.configured():
         try:
+            telegram.push_stats.update(sent=0, failed=0)
             push_jobs = [
                 j
                 for j in matched
@@ -614,12 +663,21 @@ def run_once(
             if degraded_pushed:
                 logger.info(
                     "pushing %d DEGRADED job(s) with unverified-link warning "
-                    "(listing fetch succeeded; verify rate-limited)",
+                    "(listing fetch succeeded; verification inconclusive)",
                     degraded_pushed,
                 )
             pushed = telegram.notify_new(push_jobs)
-            attachment = str(rep.get("pdf") or rep["csv"])
-            telegram.send_file(attachment, caption=f"Job harness run {run_ts}: {rep['new_count']} new")
+            # Excel workbook is the primary attachment (full field coverage,
+            # shortened hyperlinks); PDF/CSV remain as runtime fallbacks.
+            attachment = str(rep.get("xlsx") or rep.get("pdf") or rep["csv"])
+            telegram.send_file(
+                attachment, caption=f"Job harness run {run_ts}: {rep['new_count']} new (Excel report)"
+            )
+            logger.info(
+                "telegram: sent=%d failed=%d",
+                telegram.push_stats.get("sent", 0),
+                telegram.push_stats.get("failed", 0),
+            )
         except Exception as e:
             msg = f"telegram: {e}"
             errors.append(msg)
@@ -641,6 +699,8 @@ def run_once(
         "matched_count": len(matched),
         "new_count": rep["new_count"],
         "re_alerted_count": re_alerted_count,
+        "dedupe_failures": dedupe_failures,
+        "dedupe_skipped": dedupe_skipped,
         "errors": len(errors),
         "llm_budget_used": llm_used,
         "llm_budget": llm_budget,
@@ -687,6 +747,8 @@ def run_once(
     logger.info("reports: %s", rep["html"])
     if timed_out:
         logger.warning("run timed out; aborted stages: %s", timeout_aborted)
+
+    verify_cache.close()
 
     return {
         "run_ts": run_ts,

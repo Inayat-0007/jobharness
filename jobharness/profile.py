@@ -144,7 +144,7 @@ def make_demo_profile(path: str | Path) -> Profile:
         location="",
         remote=True,
         seniority="mid",
-        llm_provider="gemini",
+        llm_provider="dashscope_qwen",
         top_n=50,
     )
     save_profile(prof, path)

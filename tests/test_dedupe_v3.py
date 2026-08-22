@@ -5,6 +5,7 @@ import sqlite3
 from jobharness import algo
 from jobharness.dedupe import SCHEMA_VERSION, DedupeStore
 from jobharness.models import VALID_AUTHENTIC, Job
+from jobharness.scoring.thresholds import MIN_UNCERTAIN_IDENTITY
 
 V3_COLUMNS = [
     "canonical_job_id", "block_key", "possible_duplicate_of", "identity_score",
@@ -260,4 +261,120 @@ def test_backfill_skips_without_reports_dir(tmp_path):
         "SELECT description FROM jobs WHERE job_id_hash=?", (j.job_id_hash,)
     ).fetchone()
     assert row["description"] is None
+    store.close()
+
+
+def test_fuzzy_lookup_prefers_review_candidate_over_higher_scoring_none(tmp_path):
+    desc_in = "Python developer with Django PostgreSQL AWS experience backend API development"
+    desc_a = "Python developer with Django PostgreSQL AWS experience backend API development plus occasional mentoring of junior engineers"
+    title_a = "Backend Engineer (Remote)"
+    title_b = "Software Engineer"
+
+    # incoming job
+    incoming = Job(title="Backend Engineer", company="Acme", location="Remote")
+    incoming.description = desc_in
+    incoming.apply_url_direct = "https://acme.com/j/1"
+    incoming.authentic_status = VALID_AUTHENTIC
+    incoming.confidence_score = 70
+    incoming.compute_hash()
+    incoming.canonical_job_id = incoming.compute_canonical_id()
+    incoming.block_key = algo.blocking_keys(incoming)
+
+    # rowA: near-identical title (distinct hash so the exact-match branch is
+    # not taken), same company/location, partial desc overlap -> "review" verdict
+    rowA = Job(title=title_a, company="Acme", location="Remote")
+    rowA.description = desc_a
+    rowA.apply_url_direct = "https://acme.com/j/2"
+    rowA.authentic_status = VALID_AUTHENTIC
+    rowA.confidence_score = 70
+    rowA.compute_hash()
+    rowA.canonical_job_id = rowA.compute_canonical_id()
+    rowA.block_key = algo.blocking_keys(rowA)
+
+    # rowB: different title (s_title < 0.75), same company/location/desc -> higher score, "none" verdict
+    rowB = Job(title=title_b, company="Acme", location="Remote")
+    rowB.description = desc_in
+    rowB.apply_url_direct = "https://acme.com/j/3"
+    rowB.authentic_status = VALID_AUTHENTIC
+    rowB.confidence_score = 70
+    rowB.compute_hash()
+    rowB.canonical_job_id = rowB.compute_canonical_id()
+    rowB.block_key = algo.blocking_keys(rowB)
+
+    # Precondition checks
+    v_a, s_a = algo.composite_similarity(
+        incoming.title, incoming.company, incoming.location, incoming.description,
+        rowA.title, rowA.company, rowA.location, rowA.description,
+        url1=incoming.apply_url_direct, url2=rowA.apply_url_direct,
+    )
+    assert v_a == "review", f"rowA verdict should be review, got {v_a}"
+    assert 0.80 <= s_a < 0.88, f"rowA score {s_a} should be in [0.80, 0.88)"
+
+    v_b, s_b = algo.composite_similarity(
+        incoming.title, incoming.company, incoming.location, incoming.description,
+        rowB.title, rowB.company, rowB.location, rowB.description,
+        url1=incoming.apply_url_direct, url2=rowB.apply_url_direct,
+    )
+    assert v_b == "none", f"rowB verdict should be none, got {v_b}"
+    assert s_b > s_a, f"rowB score {s_b} should exceed rowA score {s_a}"
+
+    store = DedupeStore(tmp_path / "t.db")
+    assert store.upsert(rowA) is True
+    assert store.upsert(rowB) is True
+
+    result = store.fuzzy_lookup(incoming)
+    assert result["decision_hint"] == "REVIEW"
+    assert result["possible_duplicate_of"] == rowA.job_id_hash
+    assert result["matched"] is False
+    assert result["matched_via"] == "fuzzy"
+    assert result["identity_score"] == round(s_b, 4)
+    assert result["existing_row"]["job_id_hash"] == rowA.job_id_hash
+    store.close()
+
+def test_fuzzy_lookup_strong_none_candidate_reports_identity_score(tmp_path):
+    # All candidates verdict "none" (title-floor failure) but with a strong
+    # composite score: identity evidence must be preserved (not 0.0, which
+    # decide() would read as "no known duplicates" and could AUTO_ACCEPT),
+    # while the job stays unmatched.
+    desc_in = "Python developer with Django PostgreSQL AWS experience backend API development"
+    title_b = "Software Engineer"
+
+    incoming = Job(title="Backend Engineer", company="Acme", location="Remote")
+    incoming.description = desc_in
+    incoming.apply_url_direct = "https://acme.com/j/1"
+    incoming.authentic_status = VALID_AUTHENTIC
+    incoming.confidence_score = 70
+    incoming.compute_hash()
+    incoming.canonical_job_id = incoming.compute_canonical_id()
+    incoming.block_key = algo.blocking_keys(incoming)
+
+    # rowB: different title (below TITLE_FLOOR -> "none"), identical
+    # company/location/description -> strong composite score.
+    rowB = Job(title=title_b, company="Acme", location="Remote")
+    rowB.description = desc_in
+    rowB.apply_url_direct = "https://acme.com/j/3"
+    rowB.authentic_status = VALID_AUTHENTIC
+    rowB.confidence_score = 70
+    rowB.compute_hash()
+    rowB.canonical_job_id = rowB.compute_canonical_id()
+    rowB.block_key = algo.blocking_keys(rowB)
+
+    v_b, s_b = algo.composite_similarity(
+        incoming.title, incoming.company, incoming.location, incoming.description,
+        rowB.title, rowB.company, rowB.location, rowB.description,
+        url1=incoming.apply_url_direct, url2=rowB.apply_url_direct,
+    )
+    assert v_b == "none", f"rowB verdict should be none, got {v_b}"
+    assert s_b >= MIN_UNCERTAIN_IDENTITY, (
+        f"rowB score {s_b} should be >= MIN_UNCERTAIN_IDENTITY ({MIN_UNCERTAIN_IDENTITY})"
+    )
+
+    store = DedupeStore(tmp_path / "t.db")
+    assert store.upsert(rowB) is True
+
+    result = store.fuzzy_lookup(incoming)
+    assert result["matched"] is False
+    assert result["decision_hint"] == ""
+    assert result["matched_via"] == ""
+    assert result["identity_score"] == round(s_b, 4)
     store.close()

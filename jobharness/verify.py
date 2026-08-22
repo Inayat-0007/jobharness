@@ -1,10 +1,10 @@
-from __future__ import annotations
+﻿from __future__ import annotations
 
 import time
 
 import httpx
 
-from . import algo
+from . import algo, verify_cache
 from .evidence.source import source_authority
 from .fetcher import blocked_response, get_shared_client
 from .models import CLOSED, MISSING, Job, _parse_date, freshness_label
@@ -65,6 +65,15 @@ def _transient_status(code: int) -> bool:
     return code in (408, 429) or code == 999 or 500 <= code < 600
 
 
+def _degraded_failure_class(status_code: int) -> str:
+    """Classify a DEGRADED job's failure for the Telegram warning text:
+    429/999 are rate limits; 408/5xx are server-side errors; anything else
+    (network exceptions) is a network error."""
+    if status_code in (429, 999):
+        return "rate_limited"
+    return "server_error"
+
+
 class _SnippetResponse(httpx.Response):
     """Stand-in for fetcher.blocked_response after the stream body is consumed."""
 
@@ -91,7 +100,8 @@ def _fetch_snippet(client: httpx.Client, url: str, timeout: float = _VERIFY_TIME
 
 
 def _mark_degraded(job: Job, ctx: dict) -> Job:
-    """Mark a job DEGRADED after transient retries are exhausted.
+    """Mark a job DEGRADED after transient retries are exhausted; ctx carries
+    status/retries/failure_class used by the notification layer.
 
     Never CLOSED: the job may still be live; we just could not confirm it.
     """
@@ -111,7 +121,8 @@ def verify(job: Job, check_reachable: bool = True) -> Job:
     failures (404/410, closed markers). Transient failures (network errors,
     408/429/5xx) are retried twice with exponential backoff; if they persist
     the job is marked DEGRADED with a "verification_unreachable" negative
-    signal and a small confidence penalty (not CLOSED). Computes
+    signal, a small confidence penalty, and a failure class recorded for
+    accurate card messaging (not CLOSED). Computes
     job.confidence_score (0-100), sets employer_domain, and scores the apply
     URL host against the company name.
     """
@@ -129,6 +140,33 @@ def verify(job: Job, check_reachable: bool = True) -> Job:
     if not check_reachable:
         return job
 
+    # Cache: a definitive outcome from a recent run lets us skip the network
+    # fetch entirely. This is what stops the LinkedIn 429 storm on repeat runs
+    # (the same apply URLs were re-requested every run). Transient/DEGRADED
+    # results are never cached, so a flaky URL is retried next run.
+    cached = verify_cache.lookup(url)
+    if cached is not None:
+        cache_ctx: dict[str, int | str] = {"status_code": cached["status_code"] or 0}
+        if cached.get("redirect_to"):
+            cache_ctx["redirect_to"] = cached["redirect_to"]
+        if cached["status"] == "closed":
+            job.authentic_status = CLOSED
+            job.decision = _REJECT_DECISION
+            job._verify_ctx = cache_ctx
+            return job
+        # Cached 'ok': treat as reachable. Apply the domain-match scoring so
+        # confidence stays consistent with a live fetch (the score base is
+        # already computed above).
+        job.employer_domain = _domain(url)
+        job._verify_ctx = cache_ctx
+        if job.employer_domain and job.company:
+            hint = _company_domain_hint(job.company)
+            if hint and hint in job.employer_domain:
+                job.confidence_score = min(100, job.confidence_score + SCORE_DOMAIN_MATCH_BOOST)
+            else:
+                job.confidence_score = min(job.confidence_score, SCORE_DOMAIN_MATCH_CAP)
+        return job
+
     client = get_shared_client()
     resp: httpx.Response | None = None
     snippet = ""
@@ -139,12 +177,18 @@ def verify(job: Job, check_reachable: bool = True) -> Job:
             if attempt < _MAX_RETRIES:
                 time.sleep(_RETRY_DELAYS[attempt])
                 continue
-            return _mark_degraded(job, {"retries": attempt, "error": str(exc)})
+            return _mark_degraded(
+                job, {"retries": attempt, "error": str(exc), "failure_class": "network_error"}
+            )
         if _transient_status(resp.status_code):
             if attempt < _MAX_RETRIES:
                 time.sleep(_RETRY_DELAYS[attempt])
                 continue
-            ctx: dict[str, int | str] = {"status_code": resp.status_code, "retries": attempt}
+            ctx: dict[str, int | str] = {
+                "status_code": resp.status_code,
+                "retries": attempt,
+                "failure_class": _degraded_failure_class(resp.status_code),
+            }
             if resp.url:
                 ctx["redirect_to"] = str(resp.url)
             return _mark_degraded(job, ctx)
@@ -157,6 +201,7 @@ def verify(job: Job, check_reachable: bool = True) -> Job:
         job.authentic_status = CLOSED
         job.decision = _REJECT_DECISION
         job._verify_ctx = ctx
+        verify_cache.record(url, "closed", resp.status_code, str(ctx.get("redirect_to") or ""))
         return job
     if resp.url and str(resp.url) != url:
         job.apply_url_direct = str(resp.url)
@@ -178,6 +223,7 @@ def verify(job: Job, check_reachable: bool = True) -> Job:
         job._verify_ctx = ctx
         job.authentic_status = CLOSED
         job.decision = _REJECT_DECISION
+        verify_cache.record(url, "closed", resp.status_code, str(ctx.get("redirect_to") or ""))
         return job
     job._verify_ctx = ctx
     if job.employer_domain and job.company:
@@ -186,6 +232,7 @@ def verify(job: Job, check_reachable: bool = True) -> Job:
             job.confidence_score = min(100, job.confidence_score + SCORE_DOMAIN_MATCH_BOOST)
         else:
             job.confidence_score = min(job.confidence_score, SCORE_DOMAIN_MATCH_CAP)
+    verify_cache.record(url, "ok", resp.status_code, str(ctx.get("redirect_to") or ""))
     return job
 
 

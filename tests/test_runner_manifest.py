@@ -287,3 +287,63 @@ def test_closed_jobs_still_excluded_from_push(tmp_path, monkeypatch, caplog):
     for pushed in pushed_lists:
         assert all(j.authentic_status != "CLOSED" for j in pushed)
 
+
+
+def test_dedupe_lookup_failure_retried_on_main_store(tmp_path, monkeypatch):
+    """A failed parallel dedupe lookup is retried once sequentially on the
+    main store; when the retry succeeds the job is stored normally and the
+    manifest records zero dedupe failures."""
+    import itertools
+
+    import jobharness.dedupe as dedupe_mod
+
+    original_fuzzy_lookup = dedupe_mod.DedupeStore.fuzzy_lookup
+    call_no = itertools.count(1)
+
+    def flaky_fuzzy_lookup(self, job):
+        if next(call_no) <= 2:  # the two parallel worker lookups fail
+            raise RuntimeError("simulated transient SQLite error")
+        return original_fuzzy_lookup(self, job)
+
+    monkeypatch.setattr(dedupe_mod.DedupeStore, "fuzzy_lookup", flaky_fuzzy_lookup)
+
+    raws = [
+        _raw("Backend Engineer", "Acme", "Remote", "https://acme.com/j/1"),
+        _raw("Senior Backend Engineer", "Globex", "Austin, TX", "https://globex.com/j/2"),
+    ]
+    result = _run(tmp_path, monkeypatch, raws)
+    assert result["report"]["new_count"] == 2
+    m = json.loads(_manifest_path(tmp_path, result).read_text(encoding="utf-8"))
+    assert m["dedupe_failures"] == 0
+    assert m["new_count"] == 2
+
+
+def test_dedupe_lookup_failure_degraded_to_plain_upsert(tmp_path, monkeypatch):
+    """When the retry ALSO fails, the runner degrades to a plain upsert so
+    no job is silently dropped; dedupe_failures counts one per job whose
+    retry failed (2 jobs -> 2)."""
+    import sqlite3
+
+    import jobharness.dedupe as dedupe_mod
+
+    def always_raise(self, job):
+        raise RuntimeError("simulated persistent dedupe failure")
+
+    monkeypatch.setattr(dedupe_mod.DedupeStore, "fuzzy_lookup", always_raise)
+
+    raws = [
+        _raw("Backend Engineer", "Acme", "Remote", "https://acme.com/j/1"),
+        _raw("Senior Backend Engineer", "Globex", "Austin, TX", "https://globex.com/j/2"),
+    ]
+    result = _run(tmp_path, monkeypatch, raws)
+    assert result["report"]["new_count"] == 2
+    m = json.loads(_manifest_path(tmp_path, result).read_text(encoding="utf-8"))
+    assert m["dedupe_failures"] == 2
+    assert m["new_count"] == 2
+
+    conn = sqlite3.connect(tmp_path / "jobs.db")
+    try:
+        n = conn.execute("SELECT COUNT(*) FROM jobs").fetchone()[0]
+    finally:
+        conn.close()
+    assert n == 2

@@ -98,7 +98,7 @@ class CareerPageBrowserAdapter(SourceAdapter):
                 out.extend(chunk_out)
                 total_nav_failures += nav_failures
         if out:
-            print(f"[{self.name}] done: {len(out)} jobs from {len(seeds)} career pages")
+            _LOG.info(f"[{self.name}] done: {len(out)} jobs from {len(seeds)} career pages")
             return out
         if total_nav_failures == total_seeds:
             raise SourceDownError(
@@ -125,7 +125,7 @@ class CareerPageBrowserAdapter(SourceAdapter):
                 page = browser.pages[0] if browser.pages else browser.new_page()
                 total = len(chunk)
                 for i, (company, seed) in enumerate(chunk, start=1):
-                    print(f"[{self.name}] [{i}/{total}] {company or seed}")
+                    _LOG.info(f"[{self.name}] [{i}/{total}] {company or seed}")
                     time.sleep(random.uniform(0.5, 1.5))
                     try:
                         page.goto(seed, timeout=25000, wait_until="domcontentloaded")
@@ -147,7 +147,7 @@ class CareerPageBrowserAdapter(SourceAdapter):
                         jobs = self._extract_anchors(page, seed, company)
                     if jobs:
                         self._enrich(jobs[:enrich_cap])
-                        print(f"[{self.name}] {company or seed}: {len(jobs)} jobs")
+                        _LOG.info(f"[{self.name}] {company or seed}: {len(jobs)} jobs")
                     out.extend(jobs)
         except Exception as e:
             _LOG.warning(
@@ -168,7 +168,7 @@ class CareerPageBrowserAdapter(SourceAdapter):
         """
         out: list[RawJob] = []
         for company, seed in chunk:
-            print(f"[{self.name}] [http] {company or seed}")
+            _LOG.info(f"[{self.name}] [http] {company or seed}")
             try:
                 with make_client() as client:
                     resp = client.get(seed)
@@ -181,7 +181,7 @@ class CareerPageBrowserAdapter(SourceAdapter):
             except Exception:
                 jobs = []
             if jobs:
-                print(f"[{self.name}] {company or seed}: {len(jobs)} jobs (HTTP JSON-LD)")
+                _LOG.info(f"[{self.name}] {company or seed}: {len(jobs)} jobs (HTTP JSON-LD)")
             out.extend(jobs)
         if not out:
             raise SourceDownError(

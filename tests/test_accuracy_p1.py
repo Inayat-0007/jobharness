@@ -53,6 +53,39 @@ def test_consistent_substring_and_tokens():
     assert extractor._consistent("anything", "") is False
 
 
+
+def test_llm_normalized_salary_adopted_when_magnitude_matches(monkeypatch):
+    raw = make_raw(
+        company="Acme",
+        description="Python backend engineer. Salary: 15-20 LPA.",
+        posted_date="2023-11-14",
+    )
+    llm_out = (
+        '{"role":"Backend Engineer","title":"Backend Engineer","company":"Acme",'
+        '"location":"MISSING","experience_needed":"MISSING","date_posted":"2023-11-14",'
+        '"salary_if_present":"\u20b915L - \u20b920L","seniority":"MISSING","tech_stack_keywords":[]}'
+    )
+    monkeypatch.setattr(extractor.llm, "complete", lambda *a, **k: llm_out)
+    job = extractor.extract(raw, use_llm=True)
+    assert job.salary_if_present == "\u20b915L - \u20b920L"
+
+
+def test_llm_hallucinated_salary_rejected(monkeypatch):
+    raw = make_raw(
+        company="Acme",
+        description="Python backend engineer. Salary: 15-20 LPA.",
+        posted_date="2023-11-14",
+    )
+    llm_out = (
+        '{"role":"Backend Engineer","title":"Backend Engineer","company":"Acme",'
+        '"location":"MISSING","experience_needed":"MISSING","date_posted":"2023-11-14",'
+        '"salary_if_present":"\u20b999L - \u20b91.2Cr","seniority":"MISSING","tech_stack_keywords":[]}'
+    )
+    monkeypatch.setattr(extractor.llm, "complete", lambda *a, **k: llm_out)
+    job = extractor.extract(raw, use_llm=True)
+    assert job.salary_if_present == ""
+
+
 def test_llm_hallucinated_company_kept_source(monkeypatch):
     raw = make_raw(
         company="Acme",

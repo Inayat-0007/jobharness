@@ -190,8 +190,8 @@ def test_provider_defaults_applied_when_only_key_set(monkeypatch):
 
 def test_circuit_breaker_skips_deepseek_after_three_429s(monkeypatch):
     """3 consecutive 429 failures cool deepseek down; the next complete()
-    skips it entirely (attempt count frozen) and falls through to nvidia
-    (next in the canonical fallback chain)."""
+    skips it entirely (attempt count frozen) and falls through to
+    dashscope_qwen (first in the V5 canonical fallback chain)."""
     sleeps: list[float] = []
     client = _FakeClient([429, 429, 200] * 3 + [200], sleeps, retry_after=None)
 
@@ -205,13 +205,13 @@ def test_circuit_breaker_skips_deepseek_after_three_429s(monkeypatch):
     st = llm.stats()
     assert st["deepseek"]["attempts"] == 3
     assert st["deepseek"]["rate_limited"] == 3
-    assert st["nvidia"]["successes"] == 3
+    assert st["dashscope_qwen"]["successes"] == 3
 
     assert llm.complete("test", provider="deepseek") == "ok"
     st = llm.stats()
     assert st["deepseek"]["attempts"] == 3  # frozen: deepseek was skipped
-    assert st["nvidia"]["successes"] == 4
-    assert client.calls == 10  # 3*(429,429,200) + 1 nvidia call
+    assert st["dashscope_qwen"]["successes"] == 4
+    assert client.calls == 10  # 3*(429,429,200) + 1 dashscope_qwen call
 
 
 def test_complete_skips_cooled_provider_and_uses_next(monkeypatch):
@@ -328,7 +328,8 @@ def test_openrouter_defaults_applied_when_only_key_set(monkeypatch):
 
 def test_fallback_chain_canonical_order(monkeypatch):
     """Requested provider first, then the others in canonical order
-    [deepseek, nvidia, openrouter, gemini, glm, qwen] with it dropped."""
+    [dashscope_*, deepseek, nvidia, openrouter, gemini, glm, qwen]
+    with the requested one dropped."""
     attempted: list[str] = []
 
     def fake_cfg(name):
@@ -344,19 +345,40 @@ def test_fallback_chain_canonical_order(monkeypatch):
     monkeypatch.setattr(llm, "_provider_cfg", fake_cfg)
     monkeypatch.setattr(llm, "_call_openai_compat", fake_call)
 
-    # deepseek requested: deepseek fails -> nvidia fails -> openrouter serves
+    # deepseek requested: deepseek fails -> dashscope chain fails -> openrouter serves
     assert llm.complete("p", provider="deepseek") == "ok"
-    assert attempted == ["deepseek", "nvidia", "openrouter"]
+    assert attempted == [
+        "deepseek",
+        "dashscope_qwen",
+        "dashscope_deepseek",
+        "dashscope_glm",
+        "dashscope_pro",
+        "nvidia",
+        "openrouter",
+    ]
 
     # glm requested: glm first, then canonical order without glm
     attempted.clear()
     assert llm.complete("p", provider="glm") == "ok"
-    assert attempted == ["glm", "deepseek", "nvidia", "openrouter"]
+    assert attempted == [
+        "glm",
+        "dashscope_qwen",
+        "dashscope_deepseek",
+        "dashscope_glm",
+        "dashscope_pro",
+        "deepseek",
+        "nvidia",
+        "openrouter",
+    ]
 
 
 def test_default_fallback_chain_constant():
-    """All six providers are in the documented canonical chain."""
+    """All ten providers are in the documented canonical chain."""
     assert llm.DEFAULT_FALLBACK == [
+        "dashscope_qwen",
+        "dashscope_deepseek",
+        "dashscope_glm",
+        "dashscope_pro",
         "deepseek",
         "nvidia",
         "openrouter",
@@ -366,11 +388,22 @@ def test_default_fallback_chain_constant():
     ]
 
 
-def test_stats_preinitialized_for_all_six_providers():
+def test_stats_preinitialized_for_all_ten_providers():
     """stats() has zeroed entries for every provider, with the good alias,
     plus flat top-level totals."""
     st = llm.stats()
-    for name in ("deepseek", "nvidia", "openrouter", "gemini", "glm", "qwen"):
+    for name in (
+        "dashscope_qwen",
+        "dashscope_deepseek",
+        "dashscope_glm",
+        "dashscope_pro",
+        "deepseek",
+        "nvidia",
+        "openrouter",
+        "gemini",
+        "glm",
+        "qwen",
+    ):
         assert st[name] == {"attempts": 0, "successes": 0, "rate_limited": 0, "good": 0}
     assert st["attempts"] == 0
     assert st["good"] == 0
@@ -392,3 +425,146 @@ def test_stats_runner_flat_alias(monkeypatch):
     assert st["rate_limited"] == 0
     assert st["nvidia"]["good"] == st["nvidia"]["successes"] == 1
     assert st["openrouter"]["good"] == st["openrouter"]["successes"] == 1
+
+
+def test_retry_after_header_capped_at_30_seconds(monkeypatch):
+    """A hostile/mistaken Retry-After value must never pin a worker thread:
+    the sleep is capped at RETRY_AFTER_CAP (30s). deepseek is first in the
+    canonical fallback order, and after the capped backoff the retry
+    succeeds, so no other provider is contacted."""
+    sleeps: list[float] = []
+    client = _FakeClient([429, 200], sleeps, retry_after="3600")
+
+    monkeypatch.setattr(llm, "_provider_cfg", lambda n: ("key", "https://x.test", "model"))
+    monkeypatch.setattr(llm, "_get_client", lambda: client)
+    monkeypatch.setattr(time, "sleep", lambda s: sleeps.append(s))
+
+    result = llm.complete("test", provider="deepseek")
+
+    assert result == "ok"
+    assert client.calls == 2  # deepseek only: 429 -> retry -> 200
+    assert sleeps == [30.0]  # capped, not 3600
+
+
+def test_dashscope_defaults_when_only_key_set(monkeypatch):
+    """A bare DASHSCOPE_API_KEY configures all four dashscope_* providers via
+    their shared intl base URL and per-family default models."""
+    monkeypatch.setenv("DASHSCOPE_API_KEY", "k-dash")
+    monkeypatch.delenv("DASHSCOPE_BASE_URL", raising=False)
+    monkeypatch.delenv("DASHSCOPE_QWEN_MODEL", raising=False)
+    monkeypatch.delenv("DASHSCOPE_DEEPSEEK_MODEL", raising=False)
+    monkeypatch.delenv("DASHSCOPE_GLM_MODEL", raising=False)
+    monkeypatch.delenv("DASHSCOPE_PRO_MODEL", raising=False)
+
+    base = "https://dashscope-intl.aliyuncs.com/compatible-mode/v1"
+    assert llm._provider_cfg("dashscope_qwen") == ("k-dash", base, "qwen3.8-max")
+    assert llm._provider_cfg("dashscope_deepseek") == ("k-dash", base, "deepseek-v4-flash")
+    assert llm._provider_cfg("dashscope_glm") == ("k-dash", base, "glm-5.2")
+    assert llm._provider_cfg("dashscope_pro") == ("k-dash", base, "deepseek-v4-pro")
+
+
+def test_dashscope_model_envs_override_defaults(monkeypatch):
+    """The model env vars let one key pin specific model revisions."""
+    monkeypatch.setenv("DASHSCOPE_API_KEY", "k-dash")
+    monkeypatch.setenv("DASHSCOPE_QWEN_MODEL", "qwen3.7-flash")
+    monkeypatch.setenv("DASHSCOPE_GLM_MODEL", "glm-5.2-fast-preview")
+    monkeypatch.delenv("DASHSCOPE_BASE_URL", raising=False)
+    key, base, model = llm._provider_cfg("dashscope_qwen")
+    assert (key, model) == ("k-dash", "qwen3.7-flash")
+    assert "dashscope-intl" in base
+    key2, base2, model2 = llm._provider_cfg("dashscope_glm")
+    assert (key2, model2) == ("k-dash", "glm-5.2-fast-preview")
+
+
+def test_non_429_failures_also_trip_the_breaker(monkeypatch):
+    """3 consecutive NON-429 failures (e.g. timeouts or billing 402s) cool a
+    provider down exactly like 429s. This is the V5 fix for the 60s-per-call
+    nvidia timeout burnout: a failing endpoint is skipped after 3 strikes."""
+    sleeps: list[float] = []
+
+    def fake_cfg(name):
+        return ("key", f"https://{name}.test", "model")
+
+    def failing_call(base_url, *a, **k):
+        raise httpx.TimeoutException("The read operation timed out")
+
+    monkeypatch.setattr(llm, "_provider_cfg", fake_cfg)
+    monkeypatch.setattr(llm, "_call_openai_compat", failing_call)
+    monkeypatch.setattr(llm, "DEFAULT_FALLBACK", ["gemini"])
+    monkeypatch.setattr(time, "sleep", lambda s: sleeps.append(s))
+
+    for _ in range(3):
+        with pytest.raises(RuntimeError):
+            llm.complete("test", provider="gemini")
+
+    st = llm.stats()
+    assert st["gemini"]["attempts"] == 3
+    assert st["gemini"]["rate_limited"] == 0  # timeouts are not rate limits
+
+    # cooled down: the 4th call skips gemini immediately
+    with pytest.raises(RuntimeError, match="gemini: cooled-down"):
+        llm.complete("test", provider="gemini")
+    st = llm.stats()
+    assert st["gemini"]["attempts"] == 3  # frozen while cooled
+
+
+def test_quota_exhaustion_quarantines_immediately(monkeypatch):
+    """A single 403 quota-exhaustion error quarantines the provider for a day
+    (it cannot recover mid-run) instead of waiting for 3 consecutive failures.
+    The next call skips it and falls through to the next provider."""
+    sleeps: list[float] = []
+
+    def fake_cfg(name):
+        return ("key", f"https://{name}.test", "model")
+
+    class _QuotaResp(_FakeResp):
+        def __init__(self):
+            super().__init__(403, payload={"error": {"type": "AllocationQuota.FreeTierOnly"}})
+            self.text = '{"error": {"message": "The free quota has been exhausted"}}'
+
+    def quota_call(base_url, *a, **k):
+        name = base_url.split("//")[1].split(".")[0]
+        if name == "dashscope_qwen":
+            raise httpx.HTTPStatusError("quota", request=None, response=_QuotaResp())
+        raise httpx.TimeoutException("timeout")
+
+    monkeypatch.setattr(llm, "_provider_cfg", fake_cfg)
+    monkeypatch.setattr(llm, "_call_openai_compat", quota_call)
+    monkeypatch.setattr(llm, "DEFAULT_FALLBACK", ["glm"])
+    monkeypatch.setattr(time, "sleep", lambda s: sleeps.append(s))
+
+    with pytest.raises(RuntimeError):
+        llm.complete("test", provider="dashscope_qwen")
+
+    st = llm.stats()
+    assert st["dashscope_qwen"]["attempts"] == 1
+    assert st["dashscope_qwen"]["rate_limited"] == 0
+    # quarantined after ONE quota failure: next call skips it, glm serves
+    called: list[str] = []
+
+    def ok_call(base_url, *a, **k):
+        called.append(base_url.split("//")[1].split(".")[0])
+        return "ok"
+
+    monkeypatch.setattr(llm, "_call_openai_compat", ok_call)
+    assert llm.complete("test", provider="dashscope_qwen") == "ok"
+    assert called == ["glm"]  # only glm was contacted
+    st = llm.stats()
+    assert st["dashscope_qwen"]["attempts"] == 1  # frozen while quarantined
+    assert st["glm"]["successes"] == 1
+
+
+def test_dashscope_per_model_key_override(monkeypatch):
+    """DASHSCOPE_QWEN_API_KEY overrides the shared key for the qwen model
+    only; other dashscope providers keep the shared key."""
+    monkeypatch.setenv("DASHSCOPE_API_KEY", "k-shared")
+    monkeypatch.setenv("DASHSCOPE_QWEN_API_KEY", "k-qwen")
+    monkeypatch.delenv("DASHSCOPE_BASE_URL", raising=False)
+    monkeypatch.delenv("DASHSCOPE_DEEPSEEK_MODEL", raising=False)
+    monkeypatch.delenv("DASHSCOPE_GLM_MODEL", raising=False)
+    monkeypatch.delenv("DASHSCOPE_PRO_MODEL", raising=False)
+
+    assert llm._provider_cfg("dashscope_qwen")[0] == "k-qwen"
+    assert llm._provider_cfg("dashscope_deepseek")[0] == "k-shared"
+    assert llm._provider_cfg("dashscope_glm")[0] == "k-shared"
+    assert llm._provider_cfg("dashscope_pro")[0] == "k-shared"

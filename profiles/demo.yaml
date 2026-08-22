@@ -34,5 +34,5 @@ sources:
   linkedin: false
   indeed: false
   glassdoor: false
-llm_provider: gemini
+llm_provider: dashscope_qwen
 top_n: 50

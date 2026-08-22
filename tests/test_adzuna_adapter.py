@@ -82,8 +82,20 @@ def test_adzuna_extracts_fields(adapter):
     assert "India" in j.location  # country name appended
     assert j.apply_url == "https://adzuna.com/land/ad/1"
     assert j.posted_date == "2026-08-20T10:00:00Z"
-    assert j.extra["salary"] == 600000
+    assert j.extra["salary"] == "600000"
     assert j.extra["contract_time"] == "full_time"
+
+
+def test_adzuna_company_display_name_underscore_variant(adapter):
+    """Adzuna's real API field is company.display_name (with underscore);
+    the adapter must read it (displayname remains a fallback)."""
+    jobs = _fetch(adapter, _payload([_result(company={"display_name": "Acme"})]))
+    assert jobs[0].company == "Acme"
+
+
+def test_adzuna_salary_range_formatted(adapter):
+    jobs = _fetch(adapter, _payload([_result(salary_min=600000, salary_max=900000)]))
+    assert jobs[0].extra["salary"] == "600000 - 900000"
 
 
 def test_adzuna_remote_keyword_appended(adapter):
